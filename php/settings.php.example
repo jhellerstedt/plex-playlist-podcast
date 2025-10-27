@@ -1,0 +1,23 @@
+<?php
+/*
+ *  Example configuration for Plex-based lightphone-musiccast
+ *  Copy this file to settings.php and fill in the three placeholders below.
+ *  Commit ONLY this example file to the repository (never the real token).
+ */
+
+/*  1. Public-facing URL of this script (no trailing slash) ------------------*/
+$baseurl = 'https://your-domain.com/path/lightphone-musiccast.php';
+
+/*  2. Plex Media Server address (no trailing slash) -----------------------*/
+$plex_url = 'https://plex.example.com:32400';
+
+/*  3. Plex authentication token (20-character string) ----------------------
+ *  How to obtain:
+ *  - Open Plex Web, pick any item → “View XML”
+ *  - Look in the address bar for X-Plex-Token=XXXXXXXXXXXXXXXXXXXX
+ *  - Copy that value (or use the “Get Info” bookmarklet in the Plex docs)
+ */
+$plex_token = 'YOUR_X_PLEX_TOKEN';
+
+/*  OPTIONAL: if you ever enable local-streaming fallback you can re-add
+    $media_root here; for the API-only refactor it is NOT used. */
