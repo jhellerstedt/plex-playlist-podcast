@@ -1,289 +1,222 @@
 <?php
+/*------------------------------------------------------------------------------
+ *  Plex → Podcast RSS  (refactored from the Jellyfin version - https://github.com/nateswart/lightphone-musiccast 2025-10-27)
+ *  Reads Plex “playlist” files (*.xspf, *.m3u, *.pls) and emits
+ *  an iTunes-compatible RSS feed or validates the contained paths.
+ *----------------------------------------------------------------------------*/
+include 'settings.php';          // defines: $baseurl, $playlist_root, $media_root
 
-include 'settings.php';
-
-	
-if(isset($_GET['playlist'])) {
-	$playlist = urldecode($_GET['playlist']);
-	$randomize = urldecode($_GET['randomize']) === "true";
-	processPlaylist($playlist, $randomize, false);
-	
+/*  ROUTING  ------------------------------------------------------------------*/
+if (isset($_GET['playlist'])) {
+    $playlist  = urldecode($_GET['playlist']);
+    $randomize = urldecode($_GET['randomize']) === 'true';
+    processPlaylist($playlist, $randomize, false);
 } elseif (isset($_GET['song'])) {
-	$song = urldecode($_GET['song']);
-	streamSong($song);
-
+    $song = urldecode($_GET['song']);
+    streamSong($song);
 } elseif (isset($_GET['validate'])) {
-	$playlist = urldecode($_GET['validate']);
-	outputHtml();
-	processPlaylist($playlist, false, true);
-	
+    $playlist = urldecode($_GET['validate']);
+    outputHtml();
+    processPlaylist($playlist, false, true);
 } else {
-	outputHtml();
-	listPlaylists();
+    outputHtml();
+    listPlaylists();
 }
 
-
-
-
-function formatDateForRSS($date) {
-  return date_format( $date, 'D, d M Y H:i:s O' );
+/*  HELPER: HTML boiler-plate  ------------------------------------------------*/
+function outputHtml()
+{
+    echo "<html><head><link rel='stylesheet' href='styles.css'></head><body>";
 }
 
+/*  LIST AVAILABLE PLAYLISTS  -------------------------------------------------*/
+function listPlaylists()
+{
+    global $baseurl, $playlist_root;
+    echo '<h1>Plex Playlists</h1>';
+    $files = array_diff(scandir($playlist_root), ['..', '.']);
+    $playlists = preg_grep('/\.(xspf|m3u|pls)$/i', $files);
 
-
-function outputHtml(){
-	echo "<html><head><link rel='stylesheet' href='styles.css'></head><body>";
-}
-
-
-
-
-function listPlaylists() {
-	global $baseurl, $playlist_root;
-	
-	echo "<h1>Jellyfin Playlists</h1>";
-	
-	$playlists = array_diff(scandir($playlist_root), array('..', '.'));
-
-	$link_format = "<a href='%s'>%s</a>";
-	
-	echo "<table>";
-	echo "<thead>";
-	echo "<td>Playlist</td>";
-	echo "<td class='link_col'>Ordered</td>";
-	echo "<td class='link_col'>Randomized</td>";
-	echo "<td class='link_col'>Validate</td>";
-	echo "</thead>";
-	foreach($playlists as $playlist) {
-		$url_plain = $baseurl . "?playlist=" . urlencode($playlist) . "&randomize=false";
-		$url_randomize = $baseurl . "?playlist=" . urlencode($playlist) . "&randomize=true";
-		$url_validate = $baseurl . "?validate=" . urlencode($playlist);
-
-		echo "<tr>";
-		echo "<td>" . $playlist . "</td>";
-		echo "<td class='link_col'>" . sprintf($link_format, $url_plain, "⬇️") . "</td>";
-		echo "<td class='link_col'>" . sprintf($link_format, $url_randomize, "🔀") . "</td>";
-		echo "<td class='link_col'>" . sprintf($link_format, $url_validate, "🤖") . "</td>";
-		echo "</tr>";
-	}
-	echo "</table>";
-}
-
-
-
-
-function processPlaylist($playlist_name, $randomize, $validate) {
-	global $playlist_root, $media_root, $publish_date, $baseurl;
-	
-	$playlist = $playlist_root . $playlist_name . '/playlist.xml';
-
-	$objXmlDocument = simplexml_load_file($playlist);
-	if ($objXmlDocument === FALSE) {
-		echo "There were errors parsing the XML file.\n";
-		foreach(libxml_get_errors() as $error) {
-			echo $error->message;
-		}
-		exit;
-	}
-
-	$playlist_items = json_decode( json_encode ($objXmlDocument->PlaylistItems), TRUE);
-	$playlist_items = $playlist_items['PlaylistItem'];
-
-	$dom = new DOMDocument();
-	$dom->encoding = 'utf-8';
-	$dom->xmlVersion = '1.0';
-	$dom->formatOutput = true;
-
-	$root = $dom->createElement('rss');
-	$root->setAttributeNode(new DOMAttr('version', '2.0'));
-	$root->setAttributeNode(new DOMAttr('xmlns:itunes', 'http://www.itunes.com/dtds/podcast-1.0.dtd'));
-	$root->setAttributeNode(new DOMAttr('xmlns:content', 'http://purl.org/rss/1.0/modules/content/'));
-
-    $channel_node = $dom->createElement('channel');
-
-    // Channel Title
-    $title_node = $dom->createElement('title');
-    $title_node->appendChild( $dom->createTextNode($objXmlDocument->LocalTitle) );
-    $channel_node->appendChild($title_node);
-
-    // Channel Author
-    $author_node = $dom->createElement('itunes:author');
-    $author_node->appendChild( $dom->createTextNode('Jellyfin') );
-    $channel_node->appendChild( $author_node );
-
-    // Channel Owner
-    $owner_node = $dom->createElement('itunes:owner');
-    $owner_name_node = $dom->createElement('itunes:name');
-    $owner_name_node->appendChild( $dom->createTextNode("Jellyfin") );
-    $owner_node->appendChild($owner_name_node);
-    $channel_node->appendChild($owner_node);
- 
-    $iteration_count = 1;
-
-    // Randomize
-    if($randomize) {
-		shuffle($playlist_items);
+    $link = "<a href='%s'>%s</a>";
+    echo '<table>
+          <thead>
+            <td>Playlist</td>
+            <td class="link_col">Ordered</td>
+            <td class="link_col">Randomised</td>
+            <td class="link_col">Validate</td>
+          </thead><tbody>';
+    foreach ($playlists as $pl) {
+        $url_plain     = $baseurl . '?playlist=' . urlencode($pl) . '&randomize=false';
+        $url_randomise = $baseurl . '?playlist=' . urlencode($pl) . '&randomize=true';
+        $url_validate  = $baseurl . '?validate=' . urlencode($pl);
+        echo '<tr>
+                <td>' . htmlspecialchars($pl) . '</td>
+                <td class="link_col">' . sprintf($link, $url_plain,     '⬇️') . '</td>
+                <td class="link_col">' . sprintf($link, $url_randomise, '🔀') . '</td>
+                <td class="link_col">' . sprintf($link, $url_validate,  '🤖') . '</td>
+              </tr>';
     }
-    else {
-    	$playlist_items = array_reverse($playlist_items);
+    echo '</tbody></table>';
+}
+
+/*  CORE: BUILD RSS OR VALIDATE  --------------------------------------------*/
+function processPlaylist(string $playlistName, bool $randomize, bool $validate)
+{
+    global $playlist_root, $media_root, $baseurl;
+    $file = $playlist_root . $playlistName;
+
+    /* ---- 1. Parse playlist ----- */
+    $items = parsePlaylist($file);          // [[path=>'/music/Artist/Album/Track.mp3', title=>'Artist - Title'], ...]
+    if (!$items) {
+        exit('Cannot parse playlist: ' . htmlspecialchars($playlistName));
     }
 
-    if($validate) {
-    	echo "<h1>Playlist: " . $objXmlDocument->LocalTitle . "</h1>";
-    	echo "<pre>";
+    /* ---- 2. Order / shuffle -- */
+    if ($randomize) {
+        shuffle($items);
     }
 
-	foreach($playlist_items as $item) {
+    /* ---- 3. Validate mode ---- */
+    if ($validate) {
+        echo '<h1>Playlist: ' . htmlspecialchars($playlistName) . '</h1><pre>';
+        foreach ($items as $it) {
+            $exists = file_exists($it['path']);
+            printf(($exists ? '✅' : '❌ <strong style="color:#ff0000">') . " %s\n",
+                   htmlspecialchars($it['path']));
+        }
+        echo '</pre>';
+        return;
+    }
 
-		$rel_path = str_replace( $media_root, '', $item['Path'] );
-		$path_parts = explode( '/', $rel_path );	
-		$file_parts = explode(".", $path_parts[2]);
-		$song_parts = explode(" - ", $file_parts[0]);
+    /* ---- 4. Build RSS -------- */
+    $dom = new DOMDocument('1.0', 'utf-8');
+    $dom->formatOutput = true;
 
-		$song_name = $song_parts[1];
-		$artist_name = $path_parts[0];
-			
-		$guid = sprintf(
-			'%04X%04X-%04X-%04X-%04X-%04X%04X%04X',
-			mt_rand(0, 65535),
-			mt_rand(0, 65535),
-			mt_rand(0, 65535),
-			mt_rand(16384, 20479),
-			mt_rand(32768, 49151),
-			mt_rand(0, 65535),
-			mt_rand(0, 65535),
-			mt_rand(0, 65535));
+    $rss = $dom->createElement('rss');
+    $rss->setAttribute('version', '2.0');
+    $rss->setAttribute('xmlns:itunes', 'http://www.itunes.com/dtds/podcast-1.0.dtd');
+    $rss->setAttribute('xmlns:content', 'http://purl.org/rss/1.0/modules/content/');
 
+    $channel = $dom->createElement('channel');
 
-        // Last Build Date
-		$last_build_node = $dom->createElement('lastBuildDate');
-		$last_build_node->appendChild(
-	 	$dom->createTextNode( formatDateForRSS( date_create('now') ) ) );
-        $channel_node->appendChild($last_build_node);
+    $title = $dom->createElement('title', pathinfo($playlistName, PATHINFO_FILENAME));
+    $channel->appendChild($title);
 
+    $channel->appendChild($dom->createElement('itunes:author', 'Plex'));
+    $owner = $dom->createElement('itunes:owner');
+    $owner->appendChild($dom->createElement('itunes:name', 'Plex'));
+    $channel->appendChild($owner);
 
-        // Item	
-        $item_node = $dom->createElement("item");
-        $channel_node->appendChild($item_node);
+    $channel->appendChild($dom->createElement('lastBuildDate', date('r')));
 
-        // Item Title
-		$item_title_node = $dom->createElement("title");
-		$item_title_node->appendChild( 
-			$dom->createTextNode( $song_name . ' (' . $artist_name .')' ) );
-		$item_node->appendChild($item_title_node);
+    $episode = 1;
+    foreach ($items as $it) {
+        $itemNode = $dom->createElement('item');
 
-		// Item Publish Date
-		$pub_node = $dom->createElement('pubDate');
-			$pub_node->appendChild( $dom->createTextNode( formatDateForRSS($publish_date) ) );
-		$item_node->appendChild( $pub_node ); 
+        $itemTitle = $dom->createElement('title', htmlspecialchars($it['title']));
+        $itemNode->appendChild($itemTitle);
 
-		// Item GUID
-		$guid_node = $dom->createElement("guid");
-		$guid_node->setAttributeNode( new DOMAttr('isPermaLink', 'false') );
-			$guid_node->appendChild( $dom->createTextNode( $guid ) );
-		$item_node->appendChild($guid_node);
+        $guid = $dom->createElement('guid', bin2hex(random_bytes(16)));
+        $guid->setAttribute('isPermaLink', 'false');
+        $itemNode->appendChild($guid);
 
-		// Item Episode
-		$episode_node = $dom->createElement('itunes:episode');
-		$episode_node->appendChild( $dom->createTextNode( $iteration_count ) ); 
-		$item_node->appendChild($episode_node); 
+        $itemNode->appendChild($dom->createElement('pubDate', date('r', strtotime("-$episode days"))));
+        $itemNode->appendChild($dom->createElement('itunes:episode', $episode));
 
-		// Item Enclosure
-		$enclosure_node = $dom->createElement("enclosure");
-		$enclosure_node->setAttributeNode(
-			new DOMAttr('url', $baseurl . "?song=" . urlencode($item['Path'])));
-		$enclosure_node->setAttributeNode( new DOMAttr('type', 'audio/mpeg') ); 
-			$item_node->appendChild($enclosure_node);
+        $enclosure = $dom->createElement('enclosure');
+        $enclosure->setAttribute('url', $baseurl . '?song=' . urlencode($it['path']));
+        $enclosure->setAttribute('type', 'audio/mpeg');
+        $itemNode->appendChild($enclosure);
 
-		$iteration_count++;
-		$publish_date = date_add($publish_date,date_interval_create_from_date_string("1 day"));
+        $channel->appendChild($itemNode);
+        $episode++;
+    }
 
-		if($validate) {
-			$row_format;
+    $rss->appendChild($channel);
+    $dom->appendChild($rss);
 
-			if(!file_exists($item['Path'])) {
-				$row_format = "❌ <strong style='color: #ff0000;'>%s</strong>\n";
-			}
-			else {
-				$row_format = "✅ %s\n";
-			}
-
-			echo sprintf($row_format, $item['Path']) ;
-		}
-	}
-
-    $root->appendChild($channel_node);
-	$dom->appendChild($root);
-
-
-	if(!$validate) {
-		Header('Content-type: text/xml');
-		print $dom->saveXML();
-	}
+    header('Content-Type: application/rss+xml; charset=utf-8');
+    echo $dom->saveXML();
 }
 
+/*  UNIVERSAL PLAYLIST PARSER  -----------------------------------------------*/
+function parsePlaylist(string $file): array
+{
+    $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+    $out = [];
 
+    if ($ext === 'xspf') {
+        $xml = simplexml_load_file($file);
+        if (!$xml) { return []; }
+        foreach ($xml->trackList->track as $t) {
+            $path = (string)($t->location ?? '');
+            $path = str_replace('file://', '', $path);
+            $title = (string)($t->title ?? basename($path));
+            if ($path) { $out[] = ['path' => $path, 'title' => $title]; }
+        }
+    } elseif ($ext === 'm3u' || $ext === 'm3u8') {
+        $lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        foreach ($lines as $l) {
+            $l = trim($l);
+            if ($l === '' || $l[0] === '#') { continue; }
+            $title = basename($l);
+            $out[] = ['path' => $l, 'title' => $title];
+        }
+    } elseif ($ext === 'pls') {
+        $ini = parse_ini_file($file);
+        $i = 1;
+        while (isset($ini["File$i"])) {
+            $path = $ini["File$i"];
+            $title = $ini["Title$i"] ?? basename($path);
+            $out[] = ['path' => $path, 'title' => $title];
+            $i++;
+        }
+    }
+    return $out;
+}
 
+/*  RANGE-AWARE STREAMING  --------------------------------------------------*/
+function streamSong(string $file)
+{
+    if (!file_exists($file)) { http_response_code(404); exit('no file'); }
+    $size = filesize($file);
+    $mime = 'audio/mpeg';
+    $fp = fopen($file, 'rb');
 
-function streamSong($file) {
-	// Mostly taken from https://github.com/tuxxin/MP4Streaming
+    $start = 0;
+    $end = $size - 1;
+    $length = $size;
 
-	if(!file_exists($file)) {
-	  echo "no file";
-	  exit;
-	}
-	$fp = @fopen($file, 'rb');
-
-	$size = filesize($file); // File size
-	$length = $size; // Content length
-	$start = 0; // Start byte
-	$end = $size - 1; // End byte
-
-
-	header('Content-type: audio/m4a');
-	//header("Accept-Ranges: 0-$length");
-	header("Accept-Ranges: bytes");
-	if (isset($_SERVER['HTTP_RANGE'])) {
-		$c_start = $start;
-		$c_end = $end;
-		list(, $range) = explode('=', $_SERVER['HTTP_RANGE'], 2);
-		if (strpos($range, ',') !== false) {
-			header('HTTP/1.1 416 Requested Range Not Satisfiable');
-			header("Content-Range: bytes $start-$end/$size");
-			exit;
-		}
-		
-		if ($range == '-') {
-			$c_start = $size - substr($range, 1);
-		}else{
-			$range = explode('-', $range);
-			$c_start = $range[0];
-			$c_end = (isset($range[1]) && is_numeric($range[1])) ? $range[1] : $size;
-		}
-		$c_end = ($c_end > $end) ? $end : $c_end;
-		
-		if ($c_start > $c_end || $c_start > $size - 1 || $c_end >= $size) {
-			header('HTTP/1.1 416 Requested Range Not Satisfiable');
-			header("Content-Range: bytes $start-$end/$size");
-			exit;
-		}
-		$start = $c_start;
-		$end = $c_end;
-		$length = $end - $start + 1;
-		fseek($fp, $start);
-		header('HTTP/1.1 206 Partial Content');
-	}
-	header("Content-Range: bytes $start-$end/$size");
-	header("Content-Length: ".$length);
-	$buffer = 1024 * 8;
-	while(!feof($fp) && ($p = ftell($fp)) <= $end) {
-		if ($p + $buffer > $end) {
-			$buffer = $end - $p + 1;
-		}
-		set_time_limit(0);
-		echo fread($fp, $buffer);
-		flush();
-	}
-	fclose($fp);
-	exit();
+    header("Content-Type: $mime");
+    header('Accept-Ranges: bytes');
+    if (isset($_SERVER['HTTP_RANGE'])) {
+        list(, $range) = explode('=', $_SERVER['HTTP_RANGE'], 2);
+        if (strpos($range, ',') !== false) {
+            header('HTTP/1.1 416 Requested Range Not Satisfiable');
+            exit;
+        }
+        if ($range[0] === '-') {
+            $start = $size - substr($range, 1);
+        } else {
+            list($start, $end) = explode('-', $range);
+            $start = intval($start);
+            $end = intval($end) ?: $end;
+        }
+        if ($start > $end || $start >= $size) {
+            header('HTTP/1.1 416 Requested Range Not Satisfiable');
+            exit;
+        }
+        $end = min($end, $size - 1);
+        $length = $end - $start + 1;
+        fseek($fp, $start);
+        header('HTTP/1.1 206 Partial Content');
+    }
+    header("Content-Range: bytes $start-$end/$size");
+    header("Content-Length: $length");
+    while (!feof($fp) && (ftell($fp) <= $end)) {
+        echo fread($fp, 8192);
+        flush();
+    }
+    fclose($fp);
+    exit;
 }
