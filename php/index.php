@@ -267,14 +267,16 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0): v
     fpassthru($fh); fclose($fh);
 
     /* scrobble this single track */
+    error_log('[scrobble] partId='.$partId.' token='.substr($plex_token,-4));
+    
     $scrobbleCtx = stream_context_create([
         'http' => ['method' => 'POST', 'ignore_errors' => true],
     ]);
-    @file_get_contents(
-        "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$partId}&X-Plex-Token={$plex_token}",
-        false,
-        $scrobbleCtx
-    );
+    $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$partId}&X-Plex-Token={$plex_token}";
+    error_log('[scrobble] '.$scrobbleUrl);           // show in PHP error log
+    $resp = file_get_contents($scrobbleUrl, false, $scrobbleCtx);
+    error_log('[scrobble] Plex replied: '.($resp===false?'FAIL':$resp));
+    
     exit;
 }
 ?>
