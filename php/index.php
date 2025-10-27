@@ -209,46 +209,66 @@ function streamSongProxy(string $partId, string $fileName): void
 {
     global $plex_url, $plex_token;
 
-    $partId  = (int)$partId;
-    $fileName = basename($fileName);
-    $url = "{$plex_url}/library/parts/{$partId}/{$fileName}?download=1&X-Plex-Token={$plex_token}";
+    /* basic sanity checks */
+    $partId   = trim($partId);
+    if ($partId === '' || !ctype_digit($partId)) {
+        http_response_code(400);
+        exit('Bad request');
+    }
 
-    /* forward headers so seeking still works */
+    $fileName = trim(urldecode($fileName));
+    if ($fileName === '') {
+        http_response_code(400);
+        exit('Bad request');
+    }
+
+    /* build authenticated Plex download URL – filename MUST be encoded */
+    $url = "{$plex_url}/library/parts/{$partId}/" .
+           rawurlencode($fileName) .
+           "?download=1&X-Plex-Token={$plex_token}";
+
+    /* forward headers & stream file to client */
     $opts = [
         'http' => [
-            'method' => 'GET',
-            'header' => implode("\r\n", [
+            'method'           => 'GET',
+            'header'           => implode("\r\n", [
                 'User-Agent: ' . ($_SERVER['HTTP_USER_AGENT'] ?? 'PlexPod/1.0'),
                 isset($_SERVER['HTTP_RANGE']) ? 'Range: ' . $_SERVER['HTTP_RANGE'] : '',
             ]),
-            'follow_location' => 0,
-            'ignore_errors' => true,
+            'follow_location'  => 0,
+            'ignore_errors'    => true,
         ],
         'ssl' => [
             'verify_peer'      => false,
             'verify_peer_name' => false,
         ],
     ];
-
     $ctx  = stream_context_create($opts);
-    $fh   = fopen($url, 'rb', false, $ctx);
-    if (!$fh) { http_response_code(404); exit('Not found'); }
+    $fh   = @fopen($url, 'rb', false, $ctx);
 
-    /* copy status & headers Plex returned */
-    $headers = stream_get_meta_data($fh)['wrapper_data'] ?? [];
-    foreach ($headers as $h) {
-        if (stripos($h, 'Content-Type') === 0 ||
+    if (!$fh) {
+        http_response_code(500);
+        exit('Plex unreachable');
+    }
+
+    /* copy Plex response headers to client */
+    foreach (stream_get_meta_data($fh)['wrapper_data'] as $h) {
+        if (stripos($h, 'HTTP/') === 0 ||
+            stripos($h, 'Content-Type') === 0 ||
             stripos($h, 'Content-Range') === 0 ||
             stripos($h, 'Content-Length') === 0 ||
-            stripos($h, 'Accept-Ranges') === 0 ||
-            stripos($h, 'HTTP/') === 0) {
+            stripos($h, 'Accept-Ranges') === 0) {
             header($h);
         }
     }
 
-    /* stream the bytes */
+    /* stream bytes and finish */
     fpassthru($fh);
     fclose($fh);
     exit;
 }
+
+
+
+
 
