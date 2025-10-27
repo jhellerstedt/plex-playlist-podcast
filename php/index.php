@@ -248,6 +248,7 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0): v
 {
     global $plex_url, $plex_token;
 
+    /* ---------- 1. stream the track ---------- */
     $partId   = trim($partId);
     if ($partId === '' || !ctype_digit($partId)) { http_response_code(400); exit('Bad request'); }
     $fileName = trim(urldecode($fileName));
@@ -264,19 +265,18 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0): v
     foreach (stream_get_meta_data($fh)['wrapper_data'] as $h) {
         if (stripos($h,'HTTP/')===0||stripos($h,'Content-Type')===0) header($h);
     }
-    fpassthru($fh); fclose($fh);
+    fpassthru($fh);
+    fclose($fh);
 
-    /* scrobble this single track */
-    error_log('[scrobble] partId='.$partId.' token='.substr($plex_token,-4));
-    
-    $scrobbleCtx = stream_context_create([
-        'http' => ['method' => 'POST', 'ignore_errors' => true],
-    ]);
+    /* ---------- 2. scrobble (now actually runs) ---------- */
     $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$partId}&X-Plex-Token={$plex_token}";
-    error_log('[scrobble] '.$scrobbleUrl);           // show in PHP error log
-    $resp = file_get_contents($scrobbleUrl, false, $scrobbleCtx);
+    error_log('[scrobble] '.$scrobbleUrl);
+    $scrobbleCtx = stream_context_create(['http' => ['method' => 'POST', 'ignore_errors' => true]]);
+    $resp        = file_get_contents($scrobbleUrl, false, $scrobbleCtx);
     error_log('[scrobble] Plex replied: '.($resp===false?'FAIL':$resp));
-    
+
+    /* ---------- 3. all done ---------- */
     exit;
 }
+
 ?>
