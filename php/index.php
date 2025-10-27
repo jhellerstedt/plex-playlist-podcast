@@ -203,48 +203,48 @@ function concatPlaylist(string $playlistId): void
 {
     global $plex_url, $plex_token;
 
-    $noVerify = stream_context_create(['ssl'=>['verify_peer'=>false,'verify_peer_name'=>false]]);
+    $noVerify = stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]]);
 
-    /* 1. compute total size (kept for Apple headers) */
+    /* 1. total size calculation (unchanged) */
     $size = 0;
     try {
-        $xml = plexGet('/playlists/'.$playlistId.'/items');
+        $xml = plexGet('/playlists/' . $playlistId . '/items');
         foreach ($xml->Track as $t) {
-            $media = $t->Media; $part = $media->Part;
-            $url  = "{$plex_url}/library/parts/{$part['id']}/"
-                    .rawurlencode(basename($part['file']))
-                    .'?download=1&X-Plex-Token='.$plex_token;
-            $hdr  = @get_headers($url, true, $noVerify);
-            $size += (int)($hdr['Content-Length'] ?? 0);
+            $media = $t->Media;
+            $part  = $media->Part;
+            $url   = "{$plex_url}/library/parts/{$part['id']}/" .
+                     rawurlencode(basename($part['file'])) .
+                     '?download=1&X-Plex-Token=' . $plex_token;
+            $hdr   = @get_headers($url, true, $noVerify);
+            $size += (int) ($hdr['Content-Length'] ?? 0);
         }
-    } catch (RuntimeException) { http_response_code(404); exit('Playlist not found'); }
+    } catch (RuntimeException) {
+        http_response_code(404);
+        exit('Playlist not found');
+    }
 
-    /* 2. Apple-friendly headers */
+    /* 2. Apple headers (unchanged) */
     header('Content-Type: audio/mpeg');
     header('Accept-Ranges: bytes');
-    header('Content-Length: '.$size);
+    header('Content-Length: ' . $size);
     header('Cache-Control: no-cache');
 
     /* 3. stream & scrobble each track */
     foreach ($xml->Track as $t) {
-        $media = $t->Media; $part = $media->Part;
-        $url   = "{$plex_url}/library/parts/{$part['id']}/"
-                 .rawurlencode(basename($part['file']))
-                 .'?download=1&X-Plex-Token='.$plex_token;
-        @readfile($url, false, $noVerify);   // send audio
+        $media = $t->Media;
+        $part  = $media->Part;
+        $url   = "{$plex_url}/library/parts/{$part['id']}/" .
+                 rawurlencode(basename($part['file'])) .
+                 '?download=1&X-Plex-Token=' . $plex_token;
+        @readfile($url, false, $noVerify);          // send audio
 
-        /* scrobble this individual part */
-        /* inside concatPlaylist(), replace the scrobble block with: */
-        $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$part['id']}&X-Plex-Token={$plex_token}";
-        error_log('[concat-scrobble] '.$scrobbleUrl);
-
+        /* scrobble (fixed) */
+        $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library" .
+                       "&key={$part['id']}&X-Plex-Token={$plex_token}";
         $scrobbleCtx = stream_context_create([
             'http' => [
                 'method'  => 'POST',
-                'header'  => [
-                    'Content-Length: 0',          // empty body
-                    'User-Agent: PlexPlaylistPodcast/1.0',
-                ],
+                'header'  => ['Content-Length: 0', 'User-Agent: PlexPlaylistPodcast/1.0'],
                 'ignore_errors' => true,
             ],
             'ssl' => [
@@ -252,13 +252,10 @@ function concatPlaylist(string $playlistId): void
                 'verify_peer_name' => false,
             ],
         ]);
-        
-
-        $resp = file_get_contents($scrobbleUrl, false, $scrobbleCtx);
-        error_log('[concat-scrobble] Plex replied: '.($resp===false?'FAIL':$resp));
-        
+        @file_get_contents($scrobbleUrl, false, $scrobbleCtx);
     }
 }
+
 
 
 
