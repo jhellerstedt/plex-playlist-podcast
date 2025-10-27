@@ -3,11 +3,9 @@ services:
   plexpod:
     build:
       context: https://github.com/jhellerstedt/plex-playlist-podcast.git#v1-refactor-from-jellyfin
-      dockerfile: Dockerfile            # assumes Dockerfile sits in repo root
-    image: plexpod:local                 # local tag so docker-compose caches the build
+      dockerfile: Dockerfile
+    image: plexpod:local
     container_name: plexpod
     restart: unless-stopped
     ports:
-      - "8585:80"                       # host:container
-    volumes:
-      - ./settings.php:/var/www/html/settings.php:ro
+      - "8585:80"
