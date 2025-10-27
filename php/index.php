@@ -297,9 +297,27 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0): v
     /* ---------- 2. scrobble (now actually runs) ---------- */
     $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$partId}&X-Plex-Token={$plex_token}";
     error_log('[scrobble] '.$scrobbleUrl);
-    $scrobbleCtx = stream_context_create(['http' => ['method' => 'POST', 'ignore_errors' => true]]);
-    $resp        = file_get_contents($scrobbleUrl, false, $scrobbleCtx);
-    error_log('[scrobble] Plex replied: '.($resp===false?'FAIL':$resp));
+
+    $scrobbleCtx = stream_context_create([
+        'http' => [
+            'method'  => 'POST',
+            'header'  => "Content-Length: 0\r\nUser-Agent: PlexPlaylistPodcast/1.0\r\nAccept: */*\r\n",
+            'ignore_errors' => true,
+        ],
+        'ssl' => [
+            'verify_peer'      => false,
+            'verify_peer_name' => false,
+        ],
+    ]);
+
+    $resp = @file_get_contents($scrobbleUrl, false, $scrobbleCtx);
+    if ($resp === false) {
+        error_log('[scrobble] FAIL '.$scrobbleUrl);
+    } else {
+        $log = $resp === '' ? 'EMPTY' : trim($resp);
+        error_log('[scrobble] '.$log.' '.$scrobbleUrl);
+    }
+    
 
     /* ---------- 3. all done ---------- */
     exit;
