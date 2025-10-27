@@ -9,7 +9,12 @@ define('PODCAST_MODE', 'concat');   // 'concat' = single long episode
                                      // anything else = classic per-track feed
 
 /*  ROUTING  ------------------------------------------------------------------*/
-if (isset($_GET['m3u'])) {                        // 1️⃣  NEW: M3U playlist
+if (isset($_GET['stream'])) {                     // 1️⃣  NEW: continuous MP3
+    $id = strtok($_GET['stream'], '.');           // strip fake ".mp3"
+    concatPlaylist($id);
+    exit;
+}
+if (isset($_GET['m3u'])) {                        // 2️⃣  segmented M3U (kept)
     header('Content-Type: audio/x-mpegurl');
     echo buildM3u($_GET['m3u']);
     exit;
@@ -22,14 +27,14 @@ if (isset($_GET['plexKey'])) {
     $key = urldecode($_GET['validate']);
     outputHtml();
     processPlaylist($key, false, true);
-} elseif (isset($_GET['proxy'])) {               // 2️⃣  existing proxy
+} elseif (isset($_GET['proxy'])) {               // 3️⃣  per-track proxy
     streamSongProxy($_GET['proxy'], $_GET['f'] ?? '', $_GET['ts'] ?? 0);
 } else {
     outputHtml();
     listPlaylists();
 }
 
-/* ---------- helpers unchanged ---------- */
+/* ---------- helpers ---------- */
 function outputHtml() { echo "<html><head><link rel='stylesheet' href='styles.css'></head><body>"; }
 
 function plexGet(string $endpoint): \SimpleXMLElement
@@ -74,10 +79,10 @@ function listPlaylists(): void
 function processPlaylist(string $plexKey, bool $randomize, bool $validate): void
 {
     try {
-        $plXml       = plexGet('/playlists/' . $plexKey);
-        $playlistNode= $plXml->Playlist[0];
-        $playlistTitle=(string)($playlistNode['title']);
-        $xml         = plexGet('/playlists/' . $plexKey . '/items');
+        $plXml        = plexGet('/playlists/' . $plexKey);
+        $playlistNode = $plXml->Playlist[0];
+        $playlistTitle= (string)($playlistNode['title']);
+        $xml          = plexGet('/playlists/' . $plexKey . '/items');
     } catch (RuntimeException $e) {
         echo "<li>Skipping playlist $plexKey (Plex error: ".$e->getMessage().')</li>'; return;
     }
@@ -114,17 +119,17 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
     $channel->appendChild($dom->createElement('itunes:author', 'Plex'));
     $channel->appendChild($dom->createElement('lastBuildDate', date('r')));
 
-    if (PODCAST_MODE === 'concat') {              // 3️⃣  SINGLE EPISODE
+    if (PODCAST_MODE === 'concat') {              // single long episode
         $item = $dom->createElement('item');
         $item->appendChild($dom->createElement('title', htmlspecialchars($playlistTitle)));
         $guid = $dom->createElement('guid', $playlistId);
         $guid->setAttribute('isPermaLink', 'false');
         $item->appendChild($guid);
         $item->appendChild($dom->createElement('pubDate', date('r')));
-        $enclosure = $dom->createElement('enclosure');
-        $enclosure->setAttribute('url', $baseurl.'?m3u='.$playlistId);
-        $enclosure->setAttribute('type', 'audio/x-mpegurl');
-        $item->appendChild($enclosure);
+        $enc = $dom->createElement('enclosure');
+        $enc->setAttribute('url', $baseurl.'?stream='.$playlistId.'.mp3'); // fake .mp3
+        $enc->setAttribute('type', 'audio/mpeg');
+        $item->appendChild($enc);
         $channel->appendChild($item);
     } else {                                      // classic per-track
         $episode = 1;
@@ -149,9 +154,10 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
     echo $dom->saveXML();
 }
 
-/* ---------- M3U builder ---------- */
+/* ---------- M3U builder (kept for backward compat) ---------- */
 function buildM3u(string $playlistId): string
 {
+    global $baseurl;
     $tracks = []; $offsetMs = 0;
     try {
         $xml = plexGet('/playlists/'.$playlistId.'/items');
@@ -167,15 +173,62 @@ function buildM3u(string $playlistId): string
             ];
             $offsetMs += $dur;
         }
-    } catch (RuntimeException $e) { exit('#EXTM3U'); }
+    } catch (RuntimeException) { return "#EXTM3U"; }
 
     $out = "#EXTM3U\n";
     foreach ($tracks as $t) {
-        $url = '?proxy='.$t['partId'].'&f='.urlencode($t['fileName']).'&ts='.$t['offset'];
+        $url = $baseurl.'?proxy='.$t['partId']
+                       .'&f='.urlencode($t['fileName'])
+                       .'&ts='.$t['offset'];
         $out.= "#EXTINF:".($t['duration']/1000).",".$t['title']."\n".$url."\n";
     }
     return $out;
 }
+
+/* ---------- NEW: continuous MP3 for Apple Podcasts ---------- */
+function concatPlaylist(string $playlistId): void
+{
+    global $plex_url, $plex_token;
+
+    /* stream context that ignores cert problems */
+    $noVerify = stream_context_create([
+        'ssl' => [
+            'verify_peer'      => false,
+            'verify_peer_name' => false,
+        ],
+    ]);
+
+    /* 1. compute exact byte size (silence warnings with @) */
+    $size = 0;
+    try {
+        $xml = plexGet('/playlists/'.$playlistId.'/items');
+        foreach ($xml->Track as $t) {
+            $media = $t->Media; $part = $media->Part;
+            $url = "{$plex_url}/library/parts/{$part['id']}/"
+                   .rawurlencode(basename($part['file']))
+                   .'?download=1&X-Plex-Token='.$plex_token;
+            $hdr = @get_headers($url, true, $noVerify);   // @ + context
+            $size += (int)($hdr['Content-Length'] ?? 0);
+        }
+    } catch (RuntimeException) { http_response_code(404); exit('Playlist not found'); }
+
+    /* 2. Apple-friendly headers (must come before ANY output) */
+    header('Content-Type: audio/mpeg');
+    header('Accept-Ranges: bytes');
+    header('Content-Length: '.$size);
+    header('Cache-Control: no-cache');
+
+    /* 3. stream the bytes (same context) */
+    foreach ($xml->Track as $t) {
+        $media = $t->Media; $part = $media->Part;
+        $url = "{$plex_url}/library/parts/{$part['id']}/"
+               .rawurlencode(basename($part['file']))
+               .'?download=1&X-Plex-Token='.$plex_token;
+        @readfile($url, false, $noVerify);   // @ keeps warnings out of output
+    }
+}
+
+
 
 /* ---------- proxy + scrobble ---------- */
 function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0): void
@@ -188,7 +241,10 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0): v
     if ($fileName === '') { http_response_code(400); exit('Bad request'); }
 
     $url = "{$plex_url}/library/parts/{$partId}/".rawurlencode($fileName)."?download=1&X-Plex-Token={$plex_token}";
-    $ctx = stream_context_create(['http'=>['ignore_errors'=>true],'ssl'=>['verify_peer'=>false]]);
+    $ctx = stream_context_create([
+        'http' => ['ignore_errors' => true],
+        'ssl'  => ['verify_peer' => false, 'verify_peer_name' => false],
+    ]);
     $fh  = @fopen($url,'rb',false,$ctx);
     if (!$fh) { http_response_code(500); exit('Plex unreachable'); }
 
@@ -198,8 +254,14 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0): v
     fpassthru($fh); fclose($fh);
 
     /* scrobble this single track */
-    $mark = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$partId}&X-Plex-Token={$plex_token}";
-    @file_get_contents($mark, false, $ctx);
+    $scrobbleCtx = stream_context_create([
+        'http' => ['method' => 'POST', 'ignore_errors' => true],
+    ]);
+    @file_get_contents(
+        "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$partId}&X-Plex-Token={$plex_token}",
+        false,
+        $scrobbleCtx
+    );
     exit;
 }
 ?>
