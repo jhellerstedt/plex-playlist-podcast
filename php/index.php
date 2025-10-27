@@ -234,11 +234,24 @@ function concatPlaylist(string $playlistId): void
         @readfile($url, false, $noVerify);   // send audio
 
         /* scrobble this individual part */
+        /* inside concatPlaylist(), replace the scrobble block with: */
         $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$part['id']}&X-Plex-Token={$plex_token}";
         error_log('[concat-scrobble] '.$scrobbleUrl);
-        $scrobbleCtx = stream_context_create(['http'=>['method'=>'POST','ignore_errors'=>true]]);
-        $resp        = file_get_contents($scrobbleUrl, false, $scrobbleCtx);
+
+        $scrobbleCtx = stream_context_create([
+            'http' => [
+                'method' => 'POST',          // mandatory
+                'ignore_errors' => true,
+            ],
+            'ssl' => [                       // disable cert check
+                'verify_peer'      => false,
+                'verify_peer_name' => false,
+            ],
+        ]);
+
+        $resp = file_get_contents($scrobbleUrl, false, $scrobbleCtx);
         error_log('[concat-scrobble] Plex replied: '.($resp===false?'FAIL':$resp));
+        
     }
 }
 
