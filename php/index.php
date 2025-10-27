@@ -1,10 +1,10 @@
 <?php
 /*------------------------------------------------------------------------------
- *  Plex → Podcast RSS  (refactored from the Jellyfin version - https://github.com/nateswart/lightphone-musiccast 2025-10-27)
- *  Reads Plex “playlist” files (*.xspf, *.m3u, *.pls) and emits
+ *  Plex → Podcast RSS  (refactored from the Jellyfin version)
+ *  Reads Plex playlists from API and emits
  *  an iTunes-compatible RSS feed or validates the contained paths.
  *----------------------------------------------------------------------------*/
-include 'settings.php';          // defines: $baseurl, $playlist_root, $media_root
+include 'settings.php';          // defines: $baseurl, $plex_url, $plex_token
 
 /*  ROUTING  ------------------------------------------------------------------*/
 if (isset($_GET['plexKey'])) {
@@ -15,33 +15,54 @@ if (isset($_GET['plexKey'])) {
     $key = urldecode($_GET['validate']);
     outputHtml();
     processPlaylist($key, false, true);
+} elseif (isset($_GET['song'])) {                 // NEW: direct MP3 stream
+    streamSong($_GET['song']);
 } else {
     outputHtml();
     listPlaylists();
 }
 
-
-/*  HELPER: HTML boiler-plate  ------------------------------------------------*/
+/*  HELPER: HTML boiler-plate  ----------------------------------------------*/
 function outputHtml()
 {
     echo "<html><head><link rel='stylesheet' href='styles.css'></head><body>";
 }
 
-function plexGet(string $endPoint): ?SimpleXMLElement
+/*  HELPER: Plex API GET (with local SSL workaround)  ------------------------*/
+function plexGet(string $endpoint): \SimpleXMLElement
 {
     global $plex_url, $plex_token;
-    $url = $plex_url . $endPoint . (strpos($endPoint, '?') === false ? '?' : '&') .
-           'X-Plex-Token=' . $plex_token;
-    $xml = simplexml_load_string(file_get_contents($url));
-    return ($xml === false) ? null : $xml;
+
+    $ctx = stream_context_create([
+        'ssl' => [
+            'verify_peer'      => false,
+            'verify_peer_name' => false,
+        ],
+    ]);
+
+    $url  = $plex_url . $endpoint . '?X-Plex-Token=' . $plex_token;
+    $resp = file_get_contents($url, false, $ctx);
+
+    if ($resp === false) {
+        throw new RuntimeException('Plex unreachable at ' . $url);
+    }
+
+    $xml = simplexml_load_string($resp);
+    if ($xml === false) {
+        throw new RuntimeException('Plex returned invalid XML: ' . $resp);
+    }
+
+    return $xml;
 }
 
-
-/*  LIST AVAILABLE PLAYLISTS  -------------------------------------------------*/
+/*  LIST AVAILABLE PLAYLISTS  --------------------------------------------------*/
 function listPlaylists()
 {
-    $xml = plexGet('/playlists');
-    if (!$xml) { exit('Plex unreachable'); }
+    try {
+        $xml = plexGet('/playlists');
+    } catch (RuntimeException $e) {
+        exit('Error: ' . $e->getMessage());
+    }
 
     echo '<h1>Plex Playlists</h1><table>
           <thead><td>Playlist</td><td>Ordered</td><td>Random</td><td>Validate</td></thead><tbody>';
@@ -60,13 +81,15 @@ function listPlaylists()
     echo '</tbody></table>';
 }
 
-
 /*  CORE: BUILD RSS OR VALIDATE  --------------------------------------------*/
 function processPlaylist(string $plexKey, bool $randomize, bool $validate)
 {
     global $baseurl;
-    $xml = plexGet('/playlists/' . $plexKey . '/items');
-    if (!$xml) { exit('Playlist empty or not found'); }
+    try {
+        $xml = plexGet('/playlists/' . $plexKey . '/items');
+    } catch (RuntimeException $e) {
+        exit('Error: ' . $e->getMessage());
+    }
 
     $tracks = [];
     foreach ($xml->Track as $t) {
@@ -77,18 +100,21 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate)
     }
     if ($randomize) { shuffle($tracks); }
 
-    if ($validate) { /* same file-exists loop as original */ }
+    if ($validate) {
+        foreach ($tracks as $t) {
+            $ok = file_exists($t['path']) ? '✅' : '❌';
+            echo $ok . ' ' . htmlspecialchars($t['title']) . "<br>";
+        }
+        exit;
+    }
 
-    /* ---- build RSS exactly as original ---- */
-    buildRssFeed($tracks);        // refactored original DOM code
+    buildRssFeed($tracks);
 }
 
-
-
-/* ---- Build RSS standalone function-------- */
-
-function buildRssFeed(array $tracks, string $feedTitle = 'Plex Playlist'): void
+/* ---- Build RSS standalone function ------------------------------------- */
+function buildRssFeed(array $tracks): void
 {
+    global $baseurl;
     $dom = new DOMDocument('1.0', 'utf-8');
     $dom->formatOutput = true;
 
@@ -98,81 +124,34 @@ function buildRssFeed(array $tracks, string $feedTitle = 'Plex Playlist'): void
     $rss->setAttribute('xmlns:content', 'http://purl.org/rss/1.0/modules/content/');
 
     $channel = $dom->createElement('channel');
-
-    $title = $dom->createElement('title', pathinfo($playlistName, PATHINFO_FILENAME));
-    $channel->appendChild($title);
-
+    $channel->appendChild($dom->createElement('title', 'Plex Playlist'));
     $channel->appendChild($dom->createElement('itunes:author', 'Plex'));
     $owner = $dom->createElement('itunes:owner');
     $owner->appendChild($dom->createElement('itunes:name', 'Plex'));
     $channel->appendChild($owner);
-
     $channel->appendChild($dom->createElement('lastBuildDate', date('r')));
 
     $episode = 1;
-    foreach ($items as $it) {
+    foreach ($tracks as $it) {
         $itemNode = $dom->createElement('item');
-
-        $itemTitle = $dom->createElement('title', htmlspecialchars($it['title']));
-        $itemNode->appendChild($itemTitle);
-
+        $itemNode->appendChild($dom->createElement('title', htmlspecialchars($it['title'])));
         $guid = $dom->createElement('guid', bin2hex(random_bytes(16)));
         $guid->setAttribute('isPermaLink', 'false');
         $itemNode->appendChild($guid);
-
         $itemNode->appendChild($dom->createElement('pubDate', date('r', strtotime("-$episode days"))));
         $itemNode->appendChild($dom->createElement('itunes:episode', $episode));
-
         $enclosure = $dom->createElement('enclosure');
         $enclosure->setAttribute('url', $baseurl . '?song=' . urlencode($it['path']));
         $enclosure->setAttribute('type', 'audio/mpeg');
         $itemNode->appendChild($enclosure);
-
         $channel->appendChild($itemNode);
         $episode++;
     }
 
     $rss->appendChild($channel);
     $dom->appendChild($rss);
-
     header('Content-Type: application/rss+xml; charset=utf-8');
     echo $dom->saveXML();
-}
-
-/*  UNIVERSAL PLAYLIST PARSER  -----------------------------------------------*/
-function parsePlaylist(string $file): array
-{
-    $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-    $out = [];
-
-    if ($ext === 'xspf') {
-        $xml = simplexml_load_file($file);
-        if (!$xml) { return []; }
-        foreach ($xml->trackList->track as $t) {
-            $path = (string)($t->location ?? '');
-            $path = str_replace('file://', '', $path);
-            $title = (string)($t->title ?? basename($path));
-            if ($path) { $out[] = ['path' => $path, 'title' => $title]; }
-        }
-    } elseif ($ext === 'm3u' || $ext === 'm3u8') {
-        $lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        foreach ($lines as $l) {
-            $l = trim($l);
-            if ($l === '' || $l[0] === '#') { continue; }
-            $title = basename($l);
-            $out[] = ['path' => $l, 'title' => $title];
-        }
-    } elseif ($ext === 'pls') {
-        $ini = parse_ini_file($file);
-        $i = 1;
-        while (isset($ini["File$i"])) {
-            $path = $ini["File$i"];
-            $title = $ini["Title$i"] ?? basename($path);
-            $out[] = ['path' => $path, 'title' => $title];
-            $i++;
-        }
-    }
-    return $out;
 }
 
 /*  RANGE-AWARE STREAMING  --------------------------------------------------*/
@@ -208,7 +187,6 @@ function streamSong(string $file)
         }
         $end = min($end, $size - 1);
         $length = $end - $start + 1;
-        fseek($fp, $start);
         header('HTTP/1.1 206 Partial Content');
     }
     header("Content-Range: bytes $start-$end/$size");
