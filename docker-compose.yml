@@ -1,11 +1,13 @@
-version: '3.1'
-
+version: "3.8"
 services:
-  php:
-    image: php:apache
+  plexpod:
+    build:
+      context: https://github.com/jhellerstedt/plex-playlist-podcast.git#v1-refactor-from-jellyfin
+      dockerfile: Dockerfile            # assumes Dockerfile sits in repo root
+    image: plexpod:local                 # local tag so docker-compose caches the build
+    container_name: plexpod
+    restart: unless-stopped
     ports:
-      - 8585:80
+      - "8585:80"                       # host:container
     volumes:
-      - ./php:/var/www/html/ # Don't change these
-      - /mnt/media/Music:/media/Music # location of music library : make sure mount point matches Jellyfin's mount point
-      - ../jellyfin/config/data/playlists:/playlists # Relative path to your Jellyfin playlists : don't change right side
+      - ./settings.php:/var/www/html/settings.php:ro
