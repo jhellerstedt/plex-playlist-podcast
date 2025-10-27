@@ -39,13 +39,23 @@ function plexGet(string $endpoint): \SimpleXMLElement
             'verify_peer'      => false,
             'verify_peer_name' => false,
         ],
+        'http' => [
+            'ignore_errors' => true,          // ← keep reading on HTTP 4xx/5xx
+        ],
     ]);
 
     $url  = $plex_url . $endpoint . '?X-Plex-Token=' . $plex_token;
-    $resp = file_get_contents($url, false, $ctx);
+    /* suppress the warning but still capture the response */
+    $resp = @file_get_contents($url, false, $ctx);
 
     if ($resp === false) {
         throw new RuntimeException('Plex unreachable at ' . $url);
+    }
+
+    /* optional: look at the HTTP status line that file_get_contents returns */
+    $statusLine = $http_response_header[0] ?? '';
+    if (strpos($statusLine, '500') !== false) {
+        throw new RuntimeException('Plex returned 500 for ' . $url);
     }
 
     $xml = simplexml_load_string($resp);
@@ -55,6 +65,7 @@ function plexGet(string $endpoint): \SimpleXMLElement
 
     return $xml;
 }
+
 
 /* ---------- pre-validate playlists before we show them ---------- */
 function listPlaylists(): void
