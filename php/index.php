@@ -240,14 +240,19 @@ function concatPlaylist(string $playlistId): void
 
         $scrobbleCtx = stream_context_create([
             'http' => [
-                'method' => 'POST',          // mandatory
+                'method'  => 'POST',
+                'header'  => [
+                    'Content-Length: 0',          // empty body
+                    'User-Agent: PlexPlaylistPodcast/1.0',
+                ],
                 'ignore_errors' => true,
             ],
-            'ssl' => [                       // disable cert check
+            'ssl' => [
                 'verify_peer'      => false,
                 'verify_peer_name' => false,
             ],
         ]);
+        
 
         $resp = file_get_contents($scrobbleUrl, false, $scrobbleCtx);
         error_log('[concat-scrobble] Plex replied: '.($resp===false?'FAIL':$resp));
