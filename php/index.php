@@ -15,7 +15,7 @@ if (isset($_GET['plexKey'])) {
     $key = urldecode($_GET['validate']);
     outputHtml();
     processPlaylist($key, false, true);
-/* ➜ 1. NEW PROXY ENDPOINT */
+/* NEW PROXY ENDPOINT */
 } elseif (isset($_GET['proxy'])) {
     streamSongProxy($_GET['proxy'], $_GET['f'] ?? '');
 } else {
@@ -91,6 +91,19 @@ function listPlaylists(): void
 /*  CORE: BUILD RSS OR VALIDATE  --------------------------------------------*/
 function processPlaylist(string $plexKey, bool $randomize, bool $validate)
 {
+
+    /* fetch playlist meta-data so we have the real title */
+    try {
+        $plXml         = plexGet('/playlists/' . $plexKey);
+        /* ➜ correct: MediaContainer → Playlist → title */
+        $playlistNode  = $plXml->Playlist[0];      // first (and only) playlist
+        $playlistTitle = (string)($playlistNode['title']);
+    } catch (RuntimeException $e) {
+        echo "<li>Skipping playlist $plexKey (Plex error: " . $e->getMessage() . ')</li>';
+        return;
+    }
+    
+
     try {
         $xml = plexGet('/playlists/' . $plexKey . '/items');
     } catch (RuntimeException $e) {
@@ -126,11 +139,13 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate)
         }
         exit;
     }
-    buildRssFeed($tracks);
+    /* ➜ 2.  hand the real playlist title to the feed builder */
+    buildRssFeed($tracks, $playlistTitle);
 }
 
 /* ---- Build RSS standalone function ------------------------------------- */
-function buildRssFeed(array $tracks): void
+/* ➜ 3. accept playlist title as second argument */
+function buildRssFeed(array $tracks, string $playlistTitle = 'Plex Playlist'): void
 {
     global $baseurl;
 
@@ -143,7 +158,8 @@ function buildRssFeed(array $tracks): void
     $rss->setAttribute('xmlns:content', 'http://purl.org/rss/1.0/modules/content/');
 
     $channel = $dom->createElement('channel');
-    $channel->appendChild($dom->createElement('title', 'Plex Playlist'));
+    /* ➜ 4.  use dynamic playlist title in RSS */
+    $channel->appendChild($dom->createElement('title', htmlspecialchars($playlistTitle)));
     $channel->appendChild($dom->createElement('itunes:author', 'Plex'));
     $owner = $dom->createElement('itunes:owner');
     $owner->appendChild($dom->createElement('itunes:name', 'Plex'));
@@ -160,7 +176,7 @@ function buildRssFeed(array $tracks): void
         $itemNode->appendChild($dom->createElement('pubDate', date('r', strtotime("-$episode days"))));
         $itemNode->appendChild($dom->createElement('itunes:episode', $episode));
 
-        /* ➜ 2.  NEW: enclosure points to local proxy, hides token */
+        /* enclosure points to local proxy, hides token */
         $enclosure = $dom->createElement('enclosure');
         $enclosure->setAttribute('url',
             $baseurl . '?proxy=' . $it['partId'] . '&f=' . urlencode($it['fileName']));
@@ -177,13 +193,13 @@ function buildRssFeed(array $tracks): void
     echo $dom->saveXML();
 }
 
-/* ➜ 3.  NEW: PHP PROXY  --------------------------------------------------- */
+/*  RANGE-AWARE STREAMING  --------------------------------------------------*/
 function streamSongProxy(string $partId, string $fileName): void
 {
     global $plex_url, $plex_token;
 
     $partId  = (int)$partId;
-    $fileName = basename($fileName);          // safety
+    $fileName = basename($fileName);
     $url = "{$plex_url}/library/parts/{$partId}/{$fileName}?download=1&X-Plex-Token={$plex_token}";
 
     /* forward headers so seeking still works */
@@ -191,7 +207,7 @@ function streamSongProxy(string $partId, string $fileName): void
         'http' => [
             'method' => 'GET',
             'header' => implode("\r\n", [
-                'User-Agent: ' . $_SERVER['HTTP_USER_AGENT'] ?? 'PlexPod/1.0',
+                'User-Agent: ' . ($_SERVER['HTTP_USER_AGENT'] ?? 'PlexPod/1.0'),
                 isset($_SERVER['HTTP_RANGE']) ? 'Range: ' . $_SERVER['HTTP_RANGE'] : '',
             ]),
             'follow_location' => 0,
