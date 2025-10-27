@@ -203,43 +203,45 @@ function concatPlaylist(string $playlistId): void
 {
     global $plex_url, $plex_token;
 
-    /* stream context that ignores cert problems */
-    $noVerify = stream_context_create([
-        'ssl' => [
-            'verify_peer'      => false,
-            'verify_peer_name' => false,
-        ],
-    ]);
+    $noVerify = stream_context_create(['ssl'=>['verify_peer'=>false,'verify_peer_name'=>false]]);
 
-    /* 1. compute exact byte size (silence warnings with @) */
+    /* 1. compute total size (kept for Apple headers) */
     $size = 0;
     try {
         $xml = plexGet('/playlists/'.$playlistId.'/items');
         foreach ($xml->Track as $t) {
             $media = $t->Media; $part = $media->Part;
-            $url = "{$plex_url}/library/parts/{$part['id']}/"
-                   .rawurlencode(basename($part['file']))
-                   .'?download=1&X-Plex-Token='.$plex_token;
-            $hdr = @get_headers($url, true, $noVerify);   // @ + context
+            $url  = "{$plex_url}/library/parts/{$part['id']}/"
+                    .rawurlencode(basename($part['file']))
+                    .'?download=1&X-Plex-Token='.$plex_token;
+            $hdr  = @get_headers($url, true, $noVerify);
             $size += (int)($hdr['Content-Length'] ?? 0);
         }
     } catch (RuntimeException) { http_response_code(404); exit('Playlist not found'); }
 
-    /* 2. Apple-friendly headers (must come before ANY output) */
+    /* 2. Apple-friendly headers */
     header('Content-Type: audio/mpeg');
     header('Accept-Ranges: bytes');
     header('Content-Length: '.$size);
     header('Cache-Control: no-cache');
 
-    /* 3. stream the bytes (same context) */
+    /* 3. stream & scrobble each track */
     foreach ($xml->Track as $t) {
         $media = $t->Media; $part = $media->Part;
-        $url = "{$plex_url}/library/parts/{$part['id']}/"
-               .rawurlencode(basename($part['file']))
-               .'?download=1&X-Plex-Token='.$plex_token;
-        @readfile($url, false, $noVerify);   // @ keeps warnings out of output
+        $url   = "{$plex_url}/library/parts/{$part['id']}/"
+                 .rawurlencode(basename($part['file']))
+                 .'?download=1&X-Plex-Token='.$plex_token;
+        @readfile($url, false, $noVerify);   // send audio
+
+        /* scrobble this individual part */
+        $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$part['id']}&X-Plex-Token={$plex_token}";
+        error_log('[concat-scrobble] '.$scrobbleUrl);
+        $scrobbleCtx = stream_context_create(['http'=>['method'=>'POST','ignore_errors'=>true]]);
+        $resp        = file_get_contents($scrobbleUrl, false, $scrobbleCtx);
+        error_log('[concat-scrobble] Plex replied: '.($resp===false?'FAIL':$resp));
     }
 }
+
 
 
 
