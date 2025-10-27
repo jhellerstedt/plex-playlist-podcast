@@ -7,21 +7,19 @@
 include 'settings.php';          // defines: $baseurl, $playlist_root, $media_root
 
 /*  ROUTING  ------------------------------------------------------------------*/
-if (isset($_GET['playlist'])) {
-    $playlist  = urldecode($_GET['playlist']);
+if (isset($_GET['plexKey'])) {
+    $key       = urldecode($_GET['plexKey']);
     $randomize = urldecode($_GET['randomize']) === 'true';
-    processPlaylist($playlist, $randomize, false);
-} elseif (isset($_GET['song'])) {
-    $song = urldecode($_GET['song']);
-    streamSong($song);
+    processPlaylist($key, $randomize, false);
 } elseif (isset($_GET['validate'])) {
-    $playlist = urldecode($_GET['validate']);
+    $key = urldecode($_GET['validate']);
     outputHtml();
-    processPlaylist($playlist, false, true);
+    processPlaylist($key, false, true);
 } else {
     outputHtml();
     listPlaylists();
 }
+
 
 /*  HELPER: HTML boiler-plate  ------------------------------------------------*/
 function outputHtml()
