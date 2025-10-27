@@ -92,7 +92,14 @@ function processPlaylist(string $playlistName, bool $randomize, bool $validate)
         return;
     }
 
-    /* ---- 4. Build RSS -------- */
+
+}
+
+
+/* ---- Build RSS standalone function-------- */
+
+function buildRssFeed(array $tracks, string $feedTitle = 'Plex Playlist'): void
+{
     $dom = new DOMDocument('1.0', 'utf-8');
     $dom->formatOutput = true;
 
