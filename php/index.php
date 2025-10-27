@@ -55,32 +55,38 @@ function plexGet(string $endpoint): \SimpleXMLElement
     return $xml;
 }
 
-/*  LIST AVAILABLE PLAYLISTS  --------------------------------------------------*/
-function listPlaylists()
+/* ---------- pre-validate playlists before we show them ---------- */
+function listPlaylists(): void
 {
     try {
         $xml = plexGet('/playlists');
     } catch (RuntimeException $e) {
-        exit('Error: ' . $e->getMessage());
+        exit('Error: '.$e->getMessage());
     }
 
     echo '<h1>Plex Playlists</h1><table>
           <thead><td>Playlist</td><td>Ordered</td><td>Random</td><td>Validate</td></thead><tbody>';
     $link = "<a href='%s'>%s</a>";
     foreach ($xml->Playlist as $pl) {
-        if ((string)$pl['playlistType'] !== 'audio') { continue; }   // was $pl['type']
-        if ((int)$pl['leafCount'] === 0) { continue; } // skip empty lists
+        if ((string)$pl['playlistType'] !== 'audio') { continue; } // music only
         $key = (string)$pl['ratingKey'];
+        /* ---- pre-flight the items endpoint ---- */
+        try {
+            plexGet('/playlists/'.$key.'/items');
+        } catch (RuntimeException $e) {
+            continue; // skip any playlist that 500s
+        }
         $title = htmlspecialchars($pl['title']);
         echo '<tr>
-                <td>' . $title . '</td>
-                <td>' . sprintf($link, '?plexKey=' . $key . '&randomize=false', '⬇️') . '</td>
-                <td>' . sprintf($link, '?plexKey=' . $key . '&randomize=true',  '🔀') . '</td>
-                <td>' . sprintf($link, '?validate=' . $key, '🤖') . '</td>
+                <td>'.$title.'</td>
+                <td>'.sprintf($link, '?plexKey='.$key.'&randomize=false', '⬇️').'</td>
+                <td>'.sprintf($link, '?plexKey='.$key.'&randomize=true',  '🔀').'</td>
+                <td>'.sprintf($link, '?validate='.$key, '🤖').'</td>
               </tr>';
     }
     echo '</tbody></table>';
 }
+
 
 /*  CORE: BUILD RSS OR VALIDATE  --------------------------------------------*/
 function processPlaylist(string $plexKey, bool $randomize, bool $validate)
@@ -89,7 +95,9 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate)
     try {
         $xml = plexGet('/playlists/' . $plexKey . '/items');
     } catch (RuntimeException $e) {
-        exit('Error: ' . $e->getMessage());
+        // skip this playlist instead of dying
+        echo "<li>Skipping playlist $plexKey (Plex error: " . $e->getMessage() . ')</li>';
+        return;
     }
 
     $tracks = [];
@@ -111,6 +119,7 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate)
 
     buildRssFeed($tracks);
 }
+
 
 /* ---- Build RSS standalone function ------------------------------------- */
 function buildRssFeed(array $tracks): void
