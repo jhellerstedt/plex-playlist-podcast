@@ -15,8 +15,6 @@ if (isset($_GET['plexKey'])) {
     $key = urldecode($_GET['validate']);
     outputHtml();
     processPlaylist($key, false, true);
-} elseif (isset($_GET['song'])) {                 // NEW: direct MP3 stream
-    streamSong($_GET['song']);
 } else {
     outputHtml();
     listPlaylists();
@@ -87,11 +85,9 @@ function listPlaylists(): void
     echo '</tbody></table>';
 }
 
-
 /*  CORE: BUILD RSS OR VALIDATE  --------------------------------------------*/
 function processPlaylist(string $plexKey, bool $randomize, bool $validate)
 {
-    global $baseurl;
     try {
         $xml = plexGet('/playlists/' . $plexKey . '/items');
     } catch (RuntimeException $e) {
@@ -106,28 +102,35 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate)
         if (isset($seen[$id])) { continue; } // skip duplicate
         $seen[$id] = true;
 
-        $media = $t->Media->Part;          // first media/part
-        $path  = (string)$media['file'];     // absolute server path
-        $title = (string)($t['grandparentTitle'] . ' - ' . $t['title']);
-        $tracks[] = ['path' => $path, 'title' => $title];
+        /* 1️⃣  NEW: grab the Plex identifiers we need for streaming */
+        $media      = $t->Media;               // first <Media>
+        $part       = $media->Part;            // first <Part>
+        $partId     = (int)$part['id'];       // Plex part identifier
+        $fileName   = basename((string)$part['file']);
+        $title      = (string)($t['grandparentTitle'] . ' - ' . $t['title']);
+
+        $tracks[] = [
+            'title'    => $title,
+            'partId'   => $partId,
+            'fileName' => $fileName,
+        ];
     }
     if ($randomize) { shuffle($tracks); }
 
     if ($validate) {
         foreach ($tracks as $t) {
-            $ok = file_exists($t['path']) ? '✅' : '❌';
-            echo $ok . ' ' . htmlspecialchars($t['title']) . "<br>";
+            echo '✅ ' . htmlspecialchars($t['title']) . "<br>";
         }
         exit;
     }
     buildRssFeed($tracks);
 }
 
-
 /* ---- Build RSS standalone function ------------------------------------- */
 function buildRssFeed(array $tracks): void
 {
-    global $baseurl;
+    global $baseurl, $plex_url, $plex_token;
+
     $dom = new DOMDocument('1.0', 'utf-8');
     $dom->formatOutput = true;
 
@@ -153,10 +156,14 @@ function buildRssFeed(array $tracks): void
         $itemNode->appendChild($guid);
         $itemNode->appendChild($dom->createElement('pubDate', date('r', strtotime("-$episode days"))));
         $itemNode->appendChild($dom->createElement('itunes:episode', $episode));
+
+        /* 2️⃣  NEW: Plex stream URL instead of local path */
+        $streamUrl = "{$plex_url}/library/parts/{$it['partId']}/{$it['fileName']}?download=1&X-Plex-Token={$plex_token}";
         $enclosure = $dom->createElement('enclosure');
-        $enclosure->setAttribute('url', $baseurl . '?song=' . urlencode($it['path']));
+        $enclosure->setAttribute('url', htmlspecialchars($streamUrl));
         $enclosure->setAttribute('type', 'audio/mpeg');
         $itemNode->appendChild($enclosure);
+
         $channel->appendChild($itemNode);
         $episode++;
     }
@@ -165,49 +172,4 @@ function buildRssFeed(array $tracks): void
     $dom->appendChild($rss);
     header('Content-Type: application/rss+xml; charset=utf-8');
     echo $dom->saveXML();
-}
-
-/*  RANGE-AWARE STREAMING  --------------------------------------------------*/
-function streamSong(string $file)
-{
-    if (!file_exists($file)) { http_response_code(404); exit('no file'); }
-    $size = filesize($file);
-    $mime = 'audio/mpeg';
-    $fp = fopen($file, 'rb');
-
-    $start = 0;
-    $end = $size - 1;
-    $length = $size;
-
-    header("Content-Type: $mime");
-    header('Accept-Ranges: bytes');
-    if (isset($_SERVER['HTTP_RANGE'])) {
-        list(, $range) = explode('=', $_SERVER['HTTP_RANGE'], 2);
-        if (strpos($range, ',') !== false) {
-            header('HTTP/1.1 416 Requested Range Not Satisfiable');
-            exit;
-        }
-        if ($range[0] === '-') {
-            $start = $size - substr($range, 1);
-        } else {
-            list($start, $end) = explode('-', $range);
-            $start = intval($start);
-            $end = intval($end) ?: $end;
-        }
-        if ($start > $end || $start >= $size) {
-            header('HTTP/1.1 416 Requested Range Not Satisfiable');
-            exit;
-        }
-        $end = min($end, $size - 1);
-        $length = $end - $start + 1;
-        header('HTTP/1.1 206 Partial Content');
-    }
-    header("Content-Range: bytes $start-$end/$size");
-    header("Content-Length: $length");
-    while (!feof($fp) && (ftell($fp) <= $end)) {
-        echo fread($fp, 8192);
-        flush();
-    }
-    fclose($fp);
-    exit;
 }
