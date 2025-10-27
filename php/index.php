@@ -95,17 +95,21 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate)
     try {
         $xml = plexGet('/playlists/' . $plexKey . '/items');
     } catch (RuntimeException $e) {
-        // skip this playlist instead of dying
         echo "<li>Skipping playlist $plexKey (Plex error: " . $e->getMessage() . ')</li>';
         return;
     }
 
+    $seen = [];          // ratingKey already added
     $tracks = [];
     foreach ($xml->Track as $t) {
+        $id = (string)$t['ratingKey'];
+        if (isset($seen[$id])) { continue; } // skip duplicate
+        $seen[$id] = true;
+
         $media = $t->Media->Part;          // first media/part
-        $path  = (string)$media['file']; // absolute server path
+        $path  = (string)$media['file'];     // absolute server path
         $title = (string)($t['grandparentTitle'] . ' - ' . $t['title']);
-        $tracks[] = ['path'=>$path, 'title'=>$title];
+        $tracks[] = ['path' => $path, 'title' => $title];
     }
     if ($randomize) { shuffle($tracks); }
 
@@ -116,7 +120,6 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate)
         }
         exit;
     }
-
     buildRssFeed($tracks);
 }
 
