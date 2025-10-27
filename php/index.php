@@ -42,32 +42,26 @@ function plexGet(string $endPoint): ?SimpleXMLElement
 /*  LIST AVAILABLE PLAYLISTS  -------------------------------------------------*/
 function listPlaylists()
 {
-    global $baseurl, $playlist_root;
-    echo '<h1>Plex Playlists</h1>';
-    $files = array_diff(scandir($playlist_root), ['..', '.']);
-    $playlists = preg_grep('/\.(xspf|m3u|pls)$/i', $files);
+    $xml = plexGet('/playlists');
+    if (!$xml) { exit('Plex unreachable'); }
 
+    echo '<h1>Plex Playlists</h1><table>
+          <thead><td>Playlist</td><td>Ordered</td><td>Random</td><td>Validate</td></thead><tbody>';
     $link = "<a href='%s'>%s</a>";
-    echo '<table>
-          <thead>
-            <td>Playlist</td>
-            <td class="link_col">Ordered</td>
-            <td class="link_col">Randomised</td>
-            <td class="link_col">Validate</td>
-          </thead><tbody>';
-    foreach ($playlists as $pl) {
-        $url_plain     = $baseurl . '?playlist=' . urlencode($pl) . '&randomize=false';
-        $url_randomise = $baseurl . '?playlist=' . urlencode($pl) . '&randomize=true';
-        $url_validate  = $baseurl . '?validate=' . urlencode($pl);
+    foreach ($xml->Playlist as $pl) {
+        if ((string)$pl['type'] !== 'audio') { continue; }   // music only
+        $key = (string)$pl['ratingKey'];
+        $title = htmlspecialchars($pl['title']);
         echo '<tr>
-                <td>' . htmlspecialchars($pl) . '</td>
-                <td class="link_col">' . sprintf($link, $url_plain,     '⬇️') . '</td>
-                <td class="link_col">' . sprintf($link, $url_randomise, '🔀') . '</td>
-                <td class="link_col">' . sprintf($link, $url_validate,  '🤖') . '</td>
+                <td>' . $title . '</td>
+                <td>' . sprintf($link, '?plexKey=' . $key . '&randomize=false', '⬇️') . '</td>
+                <td>' . sprintf($link, '?plexKey=' . $key . '&randomize=true',  '🔀') . '</td>
+                <td>' . sprintf($link, '?validate=' . $key, '🤖') . '</td>
               </tr>';
     }
     echo '</tbody></table>';
 }
+
 
 /*  CORE: BUILD RSS OR VALIDATE  --------------------------------------------*/
 function processPlaylist(string $playlistName, bool $randomize, bool $validate)
