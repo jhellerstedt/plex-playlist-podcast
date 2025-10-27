@@ -29,6 +29,16 @@ function outputHtml()
     echo "<html><head><link rel='stylesheet' href='styles.css'></head><body>";
 }
 
+function plexGet(string $endPoint): ?SimpleXMLElement
+{
+    global $plex_url, $plex_token;
+    $url = $plex_url . $endPoint . (strpos($endPoint, '?') === false ? '?' : '&') .
+           'X-Plex-Token=' . $plex_token;
+    $xml = simplexml_load_string(file_get_contents($url));
+    return ($xml === false) ? null : $xml;
+}
+
+
 /*  LIST AVAILABLE PLAYLISTS  -------------------------------------------------*/
 function listPlaylists()
 {
