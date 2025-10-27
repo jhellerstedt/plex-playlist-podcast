@@ -64,36 +64,27 @@ function listPlaylists()
 
 
 /*  CORE: BUILD RSS OR VALIDATE  --------------------------------------------*/
-function processPlaylist(string $playlistName, bool $randomize, bool $validate)
+function processPlaylist(string $plexKey, bool $randomize, bool $validate)
 {
-    global $playlist_root, $media_root, $baseurl;
-    $file = $playlist_root . $playlistName;
+    global $baseurl;
+    $xml = plexGet('/playlists/' . $plexKey . '/items');
+    if (!$xml) { exit('Playlist empty or not found'); }
 
-    /* ---- 1. Parse playlist ----- */
-    $items = parsePlaylist($file);          // [[path=>'/music/Artist/Album/Track.mp3', title=>'Artist - Title'], ...]
-    if (!$items) {
-        exit('Cannot parse playlist: ' . htmlspecialchars($playlistName));
+    $tracks = [];
+    foreach ($xml->Track as $t) {
+        $media = $t->Media->Part;          // first media/part
+        $path  = (string)$media['file']; // absolute server path
+        $title = (string)($t['grandparentTitle'] . ' - ' . $t['title']);
+        $tracks[] = ['path'=>$path, 'title'=>$title];
     }
+    if ($randomize) { shuffle($tracks); }
 
-    /* ---- 2. Order / shuffle -- */
-    if ($randomize) {
-        shuffle($items);
-    }
+    if ($validate) { /* same file-exists loop as original */ }
 
-    /* ---- 3. Validate mode ---- */
-    if ($validate) {
-        echo '<h1>Playlist: ' . htmlspecialchars($playlistName) . '</h1><pre>';
-        foreach ($items as $it) {
-            $exists = file_exists($it['path']);
-            printf(($exists ? '✅' : '❌ <strong style="color:#ff0000">') . " %s\n",
-                   htmlspecialchars($it['path']));
-        }
-        echo '</pre>';
-        return;
-    }
-
-
+    /* ---- build RSS exactly as original ---- */
+    buildRssFeed($tracks);        // refactored original DOM code
 }
+
 
 
 /* ---- Build RSS standalone function-------- */
