@@ -239,12 +239,13 @@ function concatPlaylist(string $playlistId): void
         @readfile($url, false, $noVerify);          // send audio
 
         /* scrobble (fixed) */
-        $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library" .
-                       "&key={$part['id']}&X-Plex-Token={$plex_token}";
+        $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library"
+                       . "&key={$part['id']}&X-Plex-Token={$plex_token}";
+
         $scrobbleCtx = stream_context_create([
             'http' => [
                 'method'  => 'POST',
-                'header'  => ['Content-Length: 0', 'User-Agent: PlexPlaylistPodcast/1.0'],
+                'header'  => "Content-Length: 0\r\nUser-Agent: PlexPlaylistPodcast/1.0\r\nAccept: */*\r\n",
                 'ignore_errors' => true,
             ],
             'ssl' => [
@@ -252,9 +253,17 @@ function concatPlaylist(string $playlistId): void
                 'verify_peer_name' => false,
             ],
         ]);
-        @file_get_contents($scrobbleUrl, false, $scrobbleCtx);
+
+        $resp = @file_get_contents($scrobbleUrl, false, $scrobbleCtx);
+        if ($resp === false) {
+            error_log('[concat-scrobble] FAIL '.$scrobbleUrl);
+        } else {
+            $log = $resp === '' ? 'EMPTY' : trim($resp);
+            error_log('[concat-scrobble] '.$log.' '.$scrobbleUrl);
+        }
     }
 }
+
 
 
 
