@@ -265,6 +265,12 @@ function streamSongProxy(string $partId, string $fileName): void
     /* stream bytes and finish */
     fpassthru($fh);
     fclose($fh);
+    
+    /* ---------- NEW: mark played ---------- */
+    $ratingKey = $partId;          // Plex uses the same id for the track
+    $markUrl   = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$ratingKey}&X-Plex-Token={$plex_token}";
+    @file_get_contents($markUrl, false, $ctx);   // fire-and-forget
+    
     exit;
 }
 
