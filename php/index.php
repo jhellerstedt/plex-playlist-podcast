@@ -15,6 +15,9 @@ if (isset($_GET['plexKey'])) {
     $key = urldecode($_GET['validate']);
     outputHtml();
     processPlaylist($key, false, true);
+/* ➜ 1. NEW PROXY ENDPOINT */
+} elseif (isset($_GET['proxy'])) {
+    streamSongProxy($_GET['proxy'], $_GET['f'] ?? '');
 } else {
     outputHtml();
     listPlaylists();
@@ -102,7 +105,7 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate)
         if (isset($seen[$id])) { continue; } // skip duplicate
         $seen[$id] = true;
 
-        /* 1️⃣  NEW: grab the Plex identifiers we need for streaming */
+        /* grab the Plex identifiers we need for streaming */
         $media      = $t->Media;               // first <Media>
         $part       = $media->Part;            // first <Part>
         $partId     = (int)$part['id'];       // Plex part identifier
@@ -129,7 +132,7 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate)
 /* ---- Build RSS standalone function ------------------------------------- */
 function buildRssFeed(array $tracks): void
 {
-    global $baseurl, $plex_url, $plex_token;
+    global $baseurl;
 
     $dom = new DOMDocument('1.0', 'utf-8');
     $dom->formatOutput = true;
@@ -157,10 +160,10 @@ function buildRssFeed(array $tracks): void
         $itemNode->appendChild($dom->createElement('pubDate', date('r', strtotime("-$episode days"))));
         $itemNode->appendChild($dom->createElement('itunes:episode', $episode));
 
-        /* 2️⃣  NEW: Plex stream URL instead of local path */
-        $streamUrl = "{$plex_url}/library/parts/{$it['partId']}/{$it['fileName']}?download=1&X-Plex-Token={$plex_token}";
+        /* ➜ 2.  NEW: enclosure points to local proxy, hides token */
         $enclosure = $dom->createElement('enclosure');
-        $enclosure->setAttribute('url', htmlspecialchars($streamUrl));
+        $enclosure->setAttribute('url',
+            $baseurl . '?proxy=' . $it['partId'] . '&f=' . urlencode($it['fileName']));
         $enclosure->setAttribute('type', 'audio/mpeg');
         $itemNode->appendChild($enclosure);
 
@@ -173,3 +176,52 @@ function buildRssFeed(array $tracks): void
     header('Content-Type: application/rss+xml; charset=utf-8');
     echo $dom->saveXML();
 }
+
+/* ➜ 3.  NEW: PHP PROXY  --------------------------------------------------- */
+function streamSongProxy(string $partId, string $fileName): void
+{
+    global $plex_url, $plex_token;
+
+    $partId  = (int)$partId;
+    $fileName = basename($fileName);          // safety
+    $url = "{$plex_url}/library/parts/{$partId}/{$fileName}?download=1&X-Plex-Token={$plex_token}";
+
+    /* forward headers so seeking still works */
+    $opts = [
+        'http' => [
+            'method' => 'GET',
+            'header' => implode("\r\n", [
+                'User-Agent: ' . $_SERVER['HTTP_USER_AGENT'] ?? 'PlexPod/1.0',
+                isset($_SERVER['HTTP_RANGE']) ? 'Range: ' . $_SERVER['HTTP_RANGE'] : '',
+            ]),
+            'follow_location' => 0,
+            'ignore_errors' => true,
+        ],
+        'ssl' => [
+            'verify_peer'      => false,
+            'verify_peer_name' => false,
+        ],
+    ];
+
+    $ctx  = stream_context_create($opts);
+    $fh   = fopen($url, 'rb', false, $ctx);
+    if (!$fh) { http_response_code(404); exit('Not found'); }
+
+    /* copy status & headers Plex returned */
+    $headers = stream_get_meta_data($fh)['wrapper_data'] ?? [];
+    foreach ($headers as $h) {
+        if (stripos($h, 'Content-Type') === 0 ||
+            stripos($h, 'Content-Range') === 0 ||
+            stripos($h, 'Content-Length') === 0 ||
+            stripos($h, 'Accept-Ranges') === 0 ||
+            stripos($h, 'HTTP/') === 0) {
+            header($h);
+        }
+    }
+
+    /* stream the bytes */
+    fpassthru($fh);
+    fclose($fh);
+    exit;
+}
+
