@@ -69,6 +69,7 @@ function listPlaylists()
     $link = "<a href='%s'>%s</a>";
     foreach ($xml->Playlist as $pl) {
         if ((string)$pl['playlistType'] !== 'audio') { continue; }   // was $pl['type']
+        if ((int)$pl['leafCount'] === 0) { continue; } // skip empty lists
         $key = (string)$pl['ratingKey'];
         $title = htmlspecialchars($pl['title']);
         echo '<tr>
