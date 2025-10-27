@@ -54,55 +54,68 @@ function plexGet(string $endpoint): \SimpleXMLElement
 
 function listPlaylists(): void
 {
+    global $baseurl;
     try {
         $xml = plexGet('/playlists');
-    } catch (RuntimeException $e) { exit('Error: '.$e->getMessage()); }
-    echo '<h1>Plex Playlists</h1><table>
-          <thead><td>Playlist</td><td>Ordered</td><td>Random</td><td>Validate</td></thead><tbody>';
-    $link = "<a href='%s'>%s</a>";
+    } catch (RuntimeException $e) {
+        exit('Error: '.$e->getMessage());
+    }
+
+    $rows = '';                                         // collect rows first
     foreach ($xml->Playlist as $pl) {
         if ((string)$pl['playlistType'] !== 'audio') continue;
+
         $key = (string)$pl['ratingKey'];
-        try { plexGet('/playlists/'.$key.'/items'); } catch (RuntimeException) { continue; }
+        /*  make sure the playlist has items before we list it  */
+        try {
+            $items = plexGet('/playlists/'.$key.'/items');
+            if (!count($items->Track)) continue;        // empty playlist
+        } catch (RuntimeException) { continue; }        // Plex error
+
         $title = htmlspecialchars($pl['title']);
-        echo '<tr>
-                <td>'.$title.'</td>
-                <td>'.sprintf($link, '?plexKey='.$key.'&randomize=false', '⬇️').'</td>
-                <td>'.sprintf($link, '?plexKey='.$key.'&randomize=true',  '🔀').'</td>
-                <td>'.sprintf($link, '?validate='.$key, '🤖').'</td>
-              </tr>';
+        $rows .= "<tr>
+                    <td>{$title}</td>
+                    <td><a href='{$baseurl}?plexKey={$key}&randomize=false'>⬇️</a></td>
+                    <td><a href='{$baseurl}?plexKey={$key}&randomize=true'>🔀</a></td>
+                    <td><a href='{$baseurl}?validate={$key}'>🤖</a></td>
+                  </tr>";
     }
-    echo '</tbody></table>';
+
+    echo '<h1>Plex Playlists</h1><table>
+          <thead><tr><td>Playlist</td><td>Ordered</td><td>Random</td><td>Validate</td></tr></thead>
+          <tbody>'.($rows ?: '<tr><td colspan="4">No playable playlists</td></tr>').'</tbody></table>';
 }
 
 /* ---------- playlist processor ---------- */
 function processPlaylist(string $plexKey, bool $randomize, bool $validate): void
 {
     try {
-        $plXml        = plexGet('/playlists/' . $plexKey);
-        $playlistNode = $plXml->Playlist[0];
-        $playlistTitle= (string)($playlistNode['title']);
-        $xml          = plexGet('/playlists/' . $plexKey . '/items');
+        $xml = plexGet('/playlists/'.$plexKey.'/items');
     } catch (RuntimeException $e) {
-        echo "<li>Skipping playlist $plexKey (Plex error: ".$e->getMessage().')</li>'; return;
+        echo '<li>Plex error: '.htmlspecialchars($e->getMessage()).'</li>'; return;
     }
 
     $seen = []; $tracks = [];
     foreach ($xml->Track as $t) {
-        $id = (string)$t['ratingKey'];
-        if (isset($seen[$id])) continue;
-        $seen[$id] = true;
+        /* use *part* id (not track id) to avoid duplicates inside this playlist */
         $media = $t->Media; $part = $media->Part;
+        $partId = (int)$part['id'];
+        if (isset($seen[$partId])) continue;
+        $seen[$partId] = true;
+
         $tracks[] = [
             'title'    => (string)($t['grandparentTitle'].' - '.$t['title']),
-            'partId'   => (int)$part['id'],
+            'partId'   => $partId,
             'fileName' => basename((string)$part['file']),
             'duration' => (int)($media['duration'] ?? 0),
         ];
     }
     if ($randomize) shuffle($tracks);
-    if ($validate) { foreach ($tracks as $t) echo '✅ '.htmlspecialchars($t['title']).'<br>'; exit; }
-    buildRssFeed($tracks, $playlistTitle, $plexKey);
+    if ($validate) {
+        foreach ($tracks as $tr) echo '✅ '.htmlspecialchars($tr['title']).'<br>';
+        return;
+    }
+    buildRssFeed($tracks, (string)$xml['title'], $plexKey);
 }
 
 /* ---------- RSS builder ---------- */
