@@ -68,7 +68,7 @@ function listPlaylists()
           <thead><td>Playlist</td><td>Ordered</td><td>Random</td><td>Validate</td></thead><tbody>';
     $link = "<a href='%s'>%s</a>";
     foreach ($xml->Playlist as $pl) {
-        if ((string)$pl['type'] !== 'audio') { continue; }   // music only
+        if ((string)$pl['playlistType'] !== 'audio') { continue; }   // was $pl['type']
         $key = (string)$pl['ratingKey'];
         $title = htmlspecialchars($pl['title']);
         echo '<tr>
