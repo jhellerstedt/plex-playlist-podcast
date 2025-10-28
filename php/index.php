@@ -144,7 +144,7 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
         $item->appendChild($guid);
         $item->appendChild($dom->createElement('pubDate', date('r')));
         $enc = $dom->createElement('enclosure');
-        $enc->setAttribute('url', $baseurl.'?stream='.$playlistId.'.mp3'); // fake .mp3
+        $enc->setAttribute('url', $baseurl.'?stream='.$playlistId.'.mp3'.'&token='.urlencode($plex_token)); // fake .mp3
         $enc->setAttribute('type', 'audio/mpeg');
         $item->appendChild($enc);
         $channel->appendChild($item);
