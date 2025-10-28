@@ -264,7 +264,9 @@ function concatPlaylist(string $playlistId): void
         if ($resp === false) {
             error_log('[concat-timeline] FAIL '.$timelineUrl);
         } else {
-            error_log('[concat-timeline] OK track='.$ratingKey);
+            $httpCode = isset($http_response_header) ? 
+                (preg_match('/HTTP\/[\d.]+\s+(\d+)/', $http_response_header[0], $matches) ? $matches[1] : 'unknown') : 'no headers';
+            error_log('[concat-timeline] track='.$ratingKey.' response='.substr($resp, 0, 100).' httpCode='.$httpCode);
         }
     }
 }
@@ -314,8 +316,14 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
         ],
     ]);
 
-    @file_get_contents($timelineUrl, false, $timelineCtx);
-    error_log('[proxy-timeline] track='.$scrobbleKey.' duration='.$duration);
+    $resp = @file_get_contents($timelineUrl, false, $timelineCtx);
+    if ($resp === false) {
+        error_log('[proxy-timeline] FAIL track='.$scrobbleKey);
+    } else {
+        $httpCode = isset($http_response_header) ? 
+            (preg_match('/HTTP\/[\d.]+\s+(\d+)/', $http_response_header[0], $matches) ? $matches[1] : 'unknown') : 'no headers';
+        error_log('[proxy-timeline] track='.$scrobbleKey.' response='.substr($resp, 0, 100).' httpCode='.$httpCode);
+    }
 
     /* ---------- 3. stream the track ---------- */
     $url = "{$plex_url}/library/parts/{$partId}/".rawurlencode($fileName)."?download=1&X-Plex-Token={$plex_token}";
