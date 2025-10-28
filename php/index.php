@@ -77,10 +77,11 @@ function listPlaylists(): void
         $title = htmlspecialchars($pl['title']);
         $rows .= "<tr>
                     <td>{$title}</td>
-                    <td><a href='{$baseurl}?plexKey={$key}&randomize=false'>⬇️</a></td>
-                    <td><a href='{$baseurl}?plexKey={$key}&randomize=true'>🔀</a></td>
-                    <td><a href='{$baseurl}?validate={$key}'>🤖</a></td>
+                    <td><a href='{$baseurl}?plexKey={$key}&randomize=false&token=".htmlspecialchars($plex_token)."'>⬇️</a></td>
+                    <td><a href='{$baseurl}?plexKey={$key}&randomize=true&token=".htmlspecialchars($plex_token)."'>🔀</a></td>
+                    <td><a href='{$baseurl}?validate={$key}&token=".htmlspecialchars($plex_token)."'>🤖</a></td>
                   </tr>";
+        
     }
 
     echo '<h1>Plex Playlists</h1><table>
