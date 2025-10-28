@@ -1,50 +1,28 @@
 # What is it?
 
-I host all my media (including music) on a local [Jellyfin](https://jellyfin.org) server. I also use a [LightPhone](https://www.thelightphone.com/). It has basic music and podcast fuctionality, and I wanted to be able to listen to my personal media from Jellyfin on it. 
-
-This project publishes all the playlists in Jellyfin as porcast RSS feeds so you can subscribe to them via the podcast functionality on the LightPhone (the music app only supports manually uploading audio files). 
-
-
+I host all my media (including music) on a local **Plex** server. I also use a **LightPhone 3**.  
+This project publishes every Plex playlist as a podcast RSS feed so you can subscribe to them via the LightPhone’s podcast app and stream your own music continuously—even though the phone’s music app only supports manual file uploads.
 
 ## Features
 
-- All playlists on the Jellyfin server are published as separate RSS feeds
-- Each playlist is available as an ordered feed, or randomized feed (to simulate shuffle-play)
-- Randomized feeds shuffle the song order each time the podcast feed is refreshed on the LightPhone
-- Any changes made to existing playlists are immediately available (after the porcast is refreshed on the LightPhone)
-- Validation page for each playlist to inspect what songs are in the playlist by missing from the filesystem (Jellyfin leaves these references in playlists, but hides them in the UI)
-
+- **All Plex audio playlists** are exposed as separate podcast feeds  
+- **Ordered or shuffled playback** – each feed can be fetched in original order or randomized every time the feed is refreshed  
+- **“Concat” mode** – delivers the entire playlist as **one long MP3 file**; LP3 podcast tool won't play autoplay episodes from a single podcast AFAIK 
+- **Per-track proxy** – classic mode still serves every song as its own episode; both modes transparently proxy and **scrobble** the play-back to Plex once the first byte of a track is streamed  
+- **Validation page** – quickly see which tracks in a playlist are missing from disk  
+- **Immediate updates** – any change you make to a Plex playlist is reflected the next time the podcast feed is refreshed
 
 ## Assumptions
 
-- Jellyfin is hosted via Docker on the same host as lightphone-musiccast
-- Media files are available to both Jellfin and lightphone-musiccast via a common mount point or local folder 
-- Playlist names must be alpha-numeric (no special characters)
-- Only tested with .m4a files
-- Does not test for files in playlist to actually exist before adding to the podcast feed. LightPhone podcast player will crash if it tries to play a file that doesn't exist. 
+- Plex is reachable from the host running this script  
+- Media files must be readable by Plex (the script only proxies, it doesn’t re-encode)  
+- PHP ≥ 7.4 with `simplexml` and `dom` extensions  
+- Playlist names should be ASCII-friendly (spaces are fine)  
+- Only audio playlists are listed; video or mixed playlists are ignored
 
+## Quick Start
 
-
-## Screenshots
-
-### Playlist Index
-
-![Playlist Index](images/Jellyfin%20Playlists.png)
-
-
-
-### Validation Example
-
-![Playlist Validate](images/Playlist%20Validate.png)
-
-
-
-# Setup
-
-1. Customise the ports and volumes in the docker-compose.yml file
-2. Copy settings.php.sample to settings.php
-3. Customize the configuration variables in the newly created settings.php
-4. Run docker-compose up -d to start the container
-5. Visit the configured web address to see a list of your playlists as podcast feeds to enter into LightPhone dashboard 
-
-
+1. Clone the repo  
+2. `cp settings.php.sample settings.php` and fill in your Plex URL + token  
+3. Point your web server to the project root (or run the built-in Docker setup)  
+4. Visit the site – copy any playlist feed URL into your favourite podcast app or the LightPhone dashboard
