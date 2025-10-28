@@ -241,10 +241,9 @@ function concatPlaylist(string $playlistId): void
                  '?download=1&X-Plex-Token=' . $plex_token;
         @readfile($url, false, $noVerify);          // send audio
 
-        /* scrobble (fixed - use ratingKey, not partId) */
+        /* scrobble (fixed - use metadata endpoint) */
         $ratingKey = (string)$t['ratingKey'];
-        $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library"
-                       . "&key={$ratingKey}&X-Plex-Token={$plex_token}";
+        $scrobbleUrl = "{$plex_url}/library/metadata/{$ratingKey}/scrobble?X-Plex-Token={$plex_token}";
 
         $scrobbleCtx = stream_context_create([
             'http' => [
@@ -278,30 +277,16 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
 {
     global $plex_url, $plex_token;
 
-    /* ---------- 1. stream the track ---------- */
+    /* ---------- 1. validate parameters ---------- */
     $partId   = trim($partId);
     if ($partId === '' || !ctype_digit($partId)) { http_response_code(400); exit('Bad request'); }
     $fileName = trim(urldecode($fileName));
     if ($fileName === '') { http_response_code(400); exit('Bad request'); }
 
-    $url = "{$plex_url}/library/parts/{$partId}/".rawurlencode($fileName)."?download=1&X-Plex-Token={$plex_token}";
-    $ctx = stream_context_create([
-        'http' => ['ignore_errors' => true],
-        'ssl'  => ['verify_peer' => false, 'verify_peer_name' => false],
-    ]);
-    $fh  = @fopen($url,'rb',false,$ctx);
-    if (!$fh) { http_response_code(500); exit('Plex unreachable'); }
-
-    foreach (stream_get_meta_data($fh)['wrapper_data'] as $h) {
-        if (stripos($h,'HTTP/')===0||stripos($h,'Content-Type')===0) header($h);
-    }
-    fpassthru($fh);
-    fclose($fh);
-
-    /* ---------- 2. scrobble (use ratingKey, not partId) ---------- */
+    /* ---------- 2. scrobble BEFORE streaming (register at start) ---------- */
     $scrobbleKey = ($ratingKey && ctype_digit($ratingKey)) ? $ratingKey : $partId;
-    $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$scrobbleKey}&X-Plex-Token={$plex_token}";
-    error_log('[scrobble] using key='.$scrobbleKey.' '.$scrobbleUrl);
+    $scrobbleUrl = "{$plex_url}/library/metadata/{$scrobbleKey}/scrobble?X-Plex-Token={$plex_token}";
+    error_log('[scrobble] using key='.$scrobbleKey.' (before stream)');
 
     $scrobbleCtx = stream_context_create([
         'http' => [
@@ -317,11 +302,26 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
 
     $resp = @file_get_contents($scrobbleUrl, false, $scrobbleCtx);
     if ($resp === false) {
-        error_log('[scrobble] FAIL '.$scrobbleUrl);
+        error_log('[proxy-scrobble] FAIL '.$scrobbleUrl);
     } else {
         $log = $resp === '' ? 'EMPTY' : trim($resp);
-        error_log('[scrobble] '.$log.' '.$scrobbleUrl);
+        error_log('[proxy-scrobble] '.$log);
     }
+
+    /* ---------- 3. stream the track ---------- */
+    $url = "{$plex_url}/library/parts/{$partId}/".rawurlencode($fileName)."?download=1&X-Plex-Token={$plex_token}";
+    $ctx = stream_context_create([
+        'http' => ['ignore_errors' => true],
+        'ssl'  => ['verify_peer' => false, 'verify_peer_name' => false],
+    ]);
+    $fh  = @fopen($url,'rb',false,$ctx);
+    if (!$fh) { http_response_code(500); exit('Plex unreachable'); }
+
+    foreach (stream_get_meta_data($fh)['wrapper_data'] as $h) {
+        if (stripos($h,'HTTP/')===0||stripos($h,'Content-Type')===0) header($h);
+    }
+    fpassthru($fh);
+    fclose($fh);
     
 
     /* ---------- 3. all done ---------- */
