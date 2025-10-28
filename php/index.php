@@ -5,7 +5,7 @@
  *  an iTunes-compatible RSS feed or validates the contained paths.
  *----------------------------------------------------------------------------*/
 include 'settings.php';          // defines: $baseurl, $plex_url, $plex_token
-define('PODCAST_MODE', 'concat');   // 'concat' = single long episode
+define('PODCAST_MODE', 'single');   // 'concat' = single long episode
                                      // anything else = classic per-track feed
 
 /*  ROUTING  ------------------------------------------------------------------*/
@@ -233,65 +233,42 @@ function concatPlaylist(string $playlistId): void
     header('Cache-Control: no-cache');
 
     /* 3. stream & scrobble each track */
+    $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
+    $timelineCtx = stream_context_create([
+        'http' => [
+            'method'  => 'POST',
+            'header'  => "Content-Length: 0\r\n"
+                       . "User-Agent: PlexPlaylistPodcast/1.0\r\n"
+                       . "Accept: */*\r\n"
+                       . "X-Plex-Client-Identifier: {$clientId}\r\n",
+            'ignore_errors' => true,
+        ],
+        'ssl' => [
+            'verify_peer'      => false,
+            'verify_peer_name' => false,
+        ],
+    ]);
+    
     foreach ($xml->Track as $t) {
         $media = $t->Media;
         $part  = $media->Part;
-        
         $ratingKey = (string)$t['ratingKey'];
         $duration = (int)($media['duration'] ?? 0);
-        $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
         
-        /* stream the track first */
+        /* stream the track */
         $url   = "{$plex_url}/library/parts/{$part['id']}/" .
                  rawurlencode(basename($part['file'])) .
                  '?download=1&X-Plex-Token=' . $plex_token;
         @readfile($url, false, $noVerify);          // send audio
         
-        /* check if client disconnected - if so, mark this track as played but stop processing */
-        if (connection_aborted()) {
-            error_log('[concat-timeline] client disconnected, marking track='.$ratingKey.' as incomplete');
-            /* mark as played but not complete (just started listening) */
-            $timelineCtx = stream_context_create([
-                'http' => [
-                    'method'  => 'POST',
-                    'header'  => "Content-Length: 0\r\n"
-                               . "User-Agent: PlexPlaylistPodcast/1.0\r\n"
-                               . "Accept: */*\r\n"
-                               . "X-Plex-Client-Identifier: {$clientId}\r\n",
-                    'ignore_errors' => true,
-                ],
-                'ssl' => [
-                    'verify_peer'      => false,
-                    'verify_peer_name' => false,
-                ],
-            ]);
-            $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$ratingKey}&key={$ratingKey}"
-                          . "&state=stopped&time=5000&duration={$duration}"
-                          . "&X-Plex-Token={$plex_token}";
-            @file_get_contents($timelineUrl, false, $timelineCtx);
-            break;
-        }
-        
-        /* mark track as completely played */
-        $timelineCtx = stream_context_create([
-            'http' => [
-                'method'  => 'POST',
-                'header'  => "Content-Length: 0\r\n"
-                           . "User-Agent: PlexPlaylistPodcast/1.0\r\n"
-                           . "Accept: */*\r\n"
-                           . "X-Plex-Client-Identifier: {$clientId}\r\n",
-                'ignore_errors' => true,
-            ],
-            'ssl' => [
-                'verify_peer'      => false,
-                'verify_peer_name' => false,
-            ],
-        ]);
-        $completeUrl = "{$plex_url}/:/timeline?ratingKey={$ratingKey}&key={$ratingKey}"
-                      . "&state=stopped&time={$duration}&duration={$duration}"
-                      . "&X-Plex-Token={$plex_token}";
-        @file_get_contents($completeUrl, false, $timelineCtx);
-        error_log('[concat-timeline] track='.$ratingKey.' marked as complete');
+        /* In concat mode, scrobbling each track individually doesn't work because:
+           1. All tracks are sent as one continuous stream
+           2. We can't detect when the user stops playback (connection stays open while buffered)
+           3. By the time we check, all data has been sent anyway
+           
+           Best practice: Just accept that concat mode tracks won't show scrobble data, or use 
+           per-track RSS mode if scrobbling accuracy is more important than continuous playback.
+        */
     }
 }
 
