@@ -28,7 +28,7 @@ if (isset($_GET['plexKey'])) {
     outputHtml();
     processPlaylist($key, false, true);
 } elseif (isset($_GET['proxy'])) {               // 3️⃣  per-track proxy
-    streamSongProxy($_GET['proxy'], $_GET['f'] ?? '', $_GET['ts'] ?? 0);
+    streamSongProxy($_GET['proxy'], $_GET['f'] ?? '', $_GET['ts'] ?? 0, $_GET['r'] ?? '');
 } else {
     outputHtml();
     listPlaylists();
@@ -104,10 +104,11 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate): void
         $seen[$partId] = true;
 
         $tracks[] = [
-            'title'    => (string)($t['grandparentTitle'].' - '.$t['title']),
-            'partId'   => $partId,
-            'fileName' => basename((string)$part['file']),
-            'duration' => (int)($media['duration'] ?? 0),
+            'title'     => (string)($t['grandparentTitle'].' - '.$t['title']),
+            'ratingKey' => (int)$t['ratingKey'],
+            'partId'    => $partId,
+            'fileName'  => basename((string)$part['file']),
+            'duration'  => (int)($media['duration'] ?? 0),
         ];
     }
     if ($randomize) shuffle($tracks);
@@ -155,7 +156,7 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
             $item->appendChild($dom->createElement('pubDate', date('r', strtotime("-$episode days"))));
             $item->appendChild($dom->createElement('itunes:episode', $episode));
             $enc = $dom->createElement('enclosure');
-            $enc->setAttribute('url', $baseurl.'?proxy='.$t['partId'].'&f='.urlencode($t['fileName']));
+            $enc->setAttribute('url', $baseurl.'?proxy='.$t['partId'].'&f='.urlencode($t['fileName']).'&r='.$t['ratingKey']);
             $enc->setAttribute('type', 'audio/mpeg');
             $item->appendChild($enc);
             $channel->appendChild($item);
@@ -178,11 +179,12 @@ function buildM3u(string $playlistId): string
             $media = $t->Media; $part = $media->Part;
             $dur   = (int)($media['duration'] ?? 0);
             $tracks[] = [
-                'title'    => (string)($t['grandparentTitle'].' - '.$t['title']),
-                'partId'   => (int)$part['id'],
-                'fileName' => basename((string)$part['file']),
-                'duration' => $dur,
-                'offset'   => $offsetMs,
+                'title'     => (string)($t['grandparentTitle'].' - '.$t['title']),
+                'ratingKey' => (int)$t['ratingKey'],
+                'partId'    => (int)$part['id'],
+                'fileName'  => basename((string)$part['file']),
+                'duration'  => $dur,
+                'offset'    => $offsetMs,
             ];
             $offsetMs += $dur;
         }
@@ -192,7 +194,8 @@ function buildM3u(string $playlistId): string
     foreach ($tracks as $t) {
         $url = $baseurl.'?proxy='.$t['partId']
                        .'&f='.urlencode($t['fileName'])
-                       .'&ts='.$t['offset'];
+                       .'&ts='.$t['offset']
+                       .'&r='.$t['ratingKey'];
         $out.= "#EXTINF:".($t['duration']/1000).",".$t['title']."\n".$url."\n";
     }
     return $out;
@@ -238,9 +241,10 @@ function concatPlaylist(string $playlistId): void
                  '?download=1&X-Plex-Token=' . $plex_token;
         @readfile($url, false, $noVerify);          // send audio
 
-        /* scrobble (fixed) */
+        /* scrobble (fixed - use ratingKey, not partId) */
+        $ratingKey = (string)$t['ratingKey'];
         $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library"
-                       . "&key={$part['id']}&X-Plex-Token={$plex_token}";
+                       . "&key={$ratingKey}&X-Plex-Token={$plex_token}";
 
         $scrobbleCtx = stream_context_create([
             'http' => [
@@ -270,7 +274,7 @@ function concatPlaylist(string $playlistId): void
 
 
 /* ---------- proxy + scrobble ---------- */
-function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0): void
+function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, string $ratingKey = ''): void
 {
     global $plex_url, $plex_token;
 
@@ -294,9 +298,10 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0): v
     fpassthru($fh);
     fclose($fh);
 
-    /* ---------- 2. scrobble (now actually runs) ---------- */
-    $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$partId}&X-Plex-Token={$plex_token}";
-    error_log('[scrobble] '.$scrobbleUrl);
+    /* ---------- 2. scrobble (use ratingKey, not partId) ---------- */
+    $scrobbleKey = ($ratingKey && ctype_digit($ratingKey)) ? $ratingKey : $partId;
+    $scrobbleUrl = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$scrobbleKey}&X-Plex-Token={$plex_token}";
+    error_log('[scrobble] using key='.$scrobbleKey.' '.$scrobbleUrl);
 
     $scrobbleCtx = stream_context_create([
         'http' => [
