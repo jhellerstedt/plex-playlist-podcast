@@ -1,289 +1,280 @@
 <?php
+/*------------------------------------------------------------------------------
+ *  Plex → Podcast RSS  (refactored from the Jellyfin version)
+ *  Reads Plex playlists from API and emits
+ *  an iTunes-compatible RSS feed or validates the contained paths.
+ *----------------------------------------------------------------------------*/
+include 'settings.php';          // defines: $baseurl, $plex_url, $plex_token
 
-include 'settings.php';
-
-	
-if(isset($_GET['playlist'])) {
-	$playlist = urldecode($_GET['playlist']);
-	$randomize = urldecode($_GET['randomize']) === "true";
-	processPlaylist($playlist, $randomize, false);
-	
-} elseif (isset($_GET['song'])) {
-	$song = urldecode($_GET['song']);
-	streamSong($song);
-
+/*  ROUTING  ------------------------------------------------------------------*/
+if (isset($_GET['plexKey'])) {
+    $key       = urldecode($_GET['plexKey']);
+    $randomize = urldecode($_GET['randomize']) === 'true';
+    processPlaylist($key, $randomize, false);
 } elseif (isset($_GET['validate'])) {
-	$playlist = urldecode($_GET['validate']);
-	outputHtml();
-	processPlaylist($playlist, false, true);
-	
+    $key = urldecode($_GET['validate']);
+    outputHtml();
+    processPlaylist($key, false, true);
+/* NEW PROXY ENDPOINT */
+} elseif (isset($_GET['proxy'])) {
+    streamSongProxy($_GET['proxy'], $_GET['f'] ?? '');
 } else {
-	outputHtml();
-	listPlaylists();
+    outputHtml();
+    listPlaylists();
 }
 
-
-
-
-function formatDateForRSS($date) {
-  return date_format( $date, 'D, d M Y H:i:s O' );
+/*  HELPER: HTML boiler-plate  ----------------------------------------------*/
+function outputHtml()
+{
+    echo "<html><head><link rel='stylesheet' href='styles.css'></head><body>";
 }
 
+/*  HELPER: Plex API GET (with local SSL workaround)  ------------------------*/
+function plexGet(string $endpoint): \SimpleXMLElement
+{
+    global $plex_url, $plex_token;
 
+    $ctx = stream_context_create([
+        'ssl' => [
+            'verify_peer'      => false,
+            'verify_peer_name' => false,
+        ],
+        'http' => [
+            'ignore_errors' => true,          // ← keep reading on HTTP 4xx/5xx
+        ],
+    ]);
 
-function outputHtml(){
-	echo "<html><head><link rel='stylesheet' href='styles.css'></head><body>";
-}
+    $url  = $plex_url . $endpoint . '?X-Plex-Token=' . $plex_token;
+    /* suppress the warning but still capture the response */
+    $resp = @file_get_contents($url, false, $ctx);
 
-
-
-
-function listPlaylists() {
-	global $baseurl, $playlist_root;
-	
-	echo "<h1>Jellyfin Playlists</h1>";
-	
-	$playlists = array_diff(scandir($playlist_root), array('..', '.'));
-
-	$link_format = "<a href='%s'>%s</a>";
-	
-	echo "<table>";
-	echo "<thead>";
-	echo "<td>Playlist</td>";
-	echo "<td class='link_col'>Ordered</td>";
-	echo "<td class='link_col'>Randomized</td>";
-	echo "<td class='link_col'>Validate</td>";
-	echo "</thead>";
-	foreach($playlists as $playlist) {
-		$url_plain = $baseurl . "?playlist=" . urlencode($playlist) . "&randomize=false";
-		$url_randomize = $baseurl . "?playlist=" . urlencode($playlist) . "&randomize=true";
-		$url_validate = $baseurl . "?validate=" . urlencode($playlist);
-
-		echo "<tr>";
-		echo "<td>" . $playlist . "</td>";
-		echo "<td class='link_col'>" . sprintf($link_format, $url_plain, "⬇️") . "</td>";
-		echo "<td class='link_col'>" . sprintf($link_format, $url_randomize, "🔀") . "</td>";
-		echo "<td class='link_col'>" . sprintf($link_format, $url_validate, "🤖") . "</td>";
-		echo "</tr>";
-	}
-	echo "</table>";
-}
-
-
-
-
-function processPlaylist($playlist_name, $randomize, $validate) {
-	global $playlist_root, $media_root, $publish_date, $baseurl;
-	
-	$playlist = $playlist_root . $playlist_name . '/playlist.xml';
-
-	$objXmlDocument = simplexml_load_file($playlist);
-	if ($objXmlDocument === FALSE) {
-		echo "There were errors parsing the XML file.\n";
-		foreach(libxml_get_errors() as $error) {
-			echo $error->message;
-		}
-		exit;
-	}
-
-	$playlist_items = json_decode( json_encode ($objXmlDocument->PlaylistItems), TRUE);
-	$playlist_items = $playlist_items['PlaylistItem'];
-
-	$dom = new DOMDocument();
-	$dom->encoding = 'utf-8';
-	$dom->xmlVersion = '1.0';
-	$dom->formatOutput = true;
-
-	$root = $dom->createElement('rss');
-	$root->setAttributeNode(new DOMAttr('version', '2.0'));
-	$root->setAttributeNode(new DOMAttr('xmlns:itunes', 'http://www.itunes.com/dtds/podcast-1.0.dtd'));
-	$root->setAttributeNode(new DOMAttr('xmlns:content', 'http://purl.org/rss/1.0/modules/content/'));
-
-    $channel_node = $dom->createElement('channel');
-
-    // Channel Title
-    $title_node = $dom->createElement('title');
-    $title_node->appendChild( $dom->createTextNode($objXmlDocument->LocalTitle) );
-    $channel_node->appendChild($title_node);
-
-    // Channel Author
-    $author_node = $dom->createElement('itunes:author');
-    $author_node->appendChild( $dom->createTextNode('Jellyfin') );
-    $channel_node->appendChild( $author_node );
-
-    // Channel Owner
-    $owner_node = $dom->createElement('itunes:owner');
-    $owner_name_node = $dom->createElement('itunes:name');
-    $owner_name_node->appendChild( $dom->createTextNode("Jellyfin") );
-    $owner_node->appendChild($owner_name_node);
-    $channel_node->appendChild($owner_node);
- 
-    $iteration_count = 1;
-
-    // Randomize
-    if($randomize) {
-		shuffle($playlist_items);
-    }
-    else {
-    	$playlist_items = array_reverse($playlist_items);
+    if ($resp === false) {
+        throw new RuntimeException('Plex unreachable at ' . $url);
     }
 
-    if($validate) {
-    	echo "<h1>Playlist: " . $objXmlDocument->LocalTitle . "</h1>";
-    	echo "<pre>";
+    /* optional: look at the HTTP status line that file_get_contents returns */
+    $statusLine = $http_response_header[0] ?? '';
+    if (strpos($statusLine, '500') !== false) {
+        throw new RuntimeException('Plex returned 500 for ' . $url);
     }
 
-	foreach($playlist_items as $item) {
+    $xml = simplexml_load_string($resp);
+    if ($xml === false) {
+        throw new RuntimeException('Plex returned invalid XML: ' . $resp);
+    }
 
-		$rel_path = str_replace( $media_root, '', $item['Path'] );
-		$path_parts = explode( '/', $rel_path );	
-		$file_parts = explode(".", $path_parts[2]);
-		$song_parts = explode(" - ", $file_parts[0]);
-
-		$song_name = $song_parts[1];
-		$artist_name = $path_parts[0];
-			
-		$guid = sprintf(
-			'%04X%04X-%04X-%04X-%04X-%04X%04X%04X',
-			mt_rand(0, 65535),
-			mt_rand(0, 65535),
-			mt_rand(0, 65535),
-			mt_rand(16384, 20479),
-			mt_rand(32768, 49151),
-			mt_rand(0, 65535),
-			mt_rand(0, 65535),
-			mt_rand(0, 65535));
+    return $xml;
+}
 
 
-        // Last Build Date
-		$last_build_node = $dom->createElement('lastBuildDate');
-		$last_build_node->appendChild(
-	 	$dom->createTextNode( formatDateForRSS( date_create('now') ) ) );
-        $channel_node->appendChild($last_build_node);
+/* ---------- pre-validate playlists before we show them ---------- */
+function listPlaylists(): void
+{
+    try {
+        $xml = plexGet('/playlists');
+    } catch (RuntimeException $e) {
+        exit('Error: '.$e->getMessage());
+    }
 
+    echo '<h1>Plex Playlists</h1><table>
+          <thead><td>Playlist</td><td>Ordered</td><td>Random</td><td>Validate</td></thead><tbody>';
+    $link = "<a href='%s'>%s</a>";
+    foreach ($xml->Playlist as $pl) {
+        if ((string)$pl['playlistType'] !== 'audio') { continue; } // music only
+        $key = (string)$pl['ratingKey'];
+        /* ---- pre-flight the items endpoint ---- */
+        try {
+            plexGet('/playlists/'.$key.'/items');
+        } catch (RuntimeException $e) {
+            continue; // skip any playlist that 500s
+        }
+        $title = htmlspecialchars($pl['title']);
+        echo '<tr>
+                <td>'.$title.'</td>
+                <td>'.sprintf($link, '?plexKey='.$key.'&randomize=false', '⬇️').'</td>
+                <td>'.sprintf($link, '?plexKey='.$key.'&randomize=true',  '🔀').'</td>
+                <td>'.sprintf($link, '?validate='.$key, '🤖').'</td>
+              </tr>';
+    }
+    echo '</tbody></table>';
+}
 
-        // Item	
-        $item_node = $dom->createElement("item");
-        $channel_node->appendChild($item_node);
+/*  CORE: BUILD RSS OR VALIDATE  --------------------------------------------*/
+function processPlaylist(string $plexKey, bool $randomize, bool $validate)
+{
 
-        // Item Title
-		$item_title_node = $dom->createElement("title");
-		$item_title_node->appendChild( 
-			$dom->createTextNode( $song_name . ' (' . $artist_name .')' ) );
-		$item_node->appendChild($item_title_node);
+    /* fetch playlist meta-data so we have the real title */
+    try {
+        $plXml         = plexGet('/playlists/' . $plexKey);
+        /* ➜ correct: MediaContainer → Playlist → title */
+        $playlistNode  = $plXml->Playlist[0];      // first (and only) playlist
+        $playlistTitle = (string)($playlistNode['title']);
+    } catch (RuntimeException $e) {
+        echo "<li>Skipping playlist $plexKey (Plex error: " . $e->getMessage() . ')</li>';
+        return;
+    }
+    
 
-		// Item Publish Date
-		$pub_node = $dom->createElement('pubDate');
-			$pub_node->appendChild( $dom->createTextNode( formatDateForRSS($publish_date) ) );
-		$item_node->appendChild( $pub_node ); 
+    try {
+        $xml = plexGet('/playlists/' . $plexKey . '/items');
+    } catch (RuntimeException $e) {
+        echo "<li>Skipping playlist $plexKey (Plex error: " . $e->getMessage() . ')</li>';
+        return;
+    }
 
-		// Item GUID
-		$guid_node = $dom->createElement("guid");
-		$guid_node->setAttributeNode( new DOMAttr('isPermaLink', 'false') );
-			$guid_node->appendChild( $dom->createTextNode( $guid ) );
-		$item_node->appendChild($guid_node);
+    $seen = [];          // ratingKey already added
+    $tracks = [];
+    foreach ($xml->Track as $t) {
+        $id = (string)$t['ratingKey'];
+        if (isset($seen[$id])) { continue; } // skip duplicate
+        $seen[$id] = true;
 
-		// Item Episode
-		$episode_node = $dom->createElement('itunes:episode');
-		$episode_node->appendChild( $dom->createTextNode( $iteration_count ) ); 
-		$item_node->appendChild($episode_node); 
+        /* grab the Plex identifiers we need for streaming */
+        $media      = $t->Media;               // first <Media>
+        $part       = $media->Part;            // first <Part>
+        $partId     = (int)$part['id'];       // Plex part identifier
+        $fileName   = basename((string)$part['file']);
+        $title      = (string)($t['grandparentTitle'] . ' - ' . $t['title']);
 
-		// Item Enclosure
-		$enclosure_node = $dom->createElement("enclosure");
-		$enclosure_node->setAttributeNode(
-			new DOMAttr('url', $baseurl . "?song=" . urlencode($item['Path'])));
-		$enclosure_node->setAttributeNode( new DOMAttr('type', 'audio/mpeg') ); 
-			$item_node->appendChild($enclosure_node);
+        $tracks[] = [
+            'title'    => $title,
+            'partId'   => $partId,
+            'fileName' => $fileName,
+        ];
+    }
+    if ($randomize) { shuffle($tracks); }
 
-		$iteration_count++;
-		$publish_date = date_add($publish_date,date_interval_create_from_date_string("1 day"));
+    if ($validate) {
+        foreach ($tracks as $t) {
+            echo '✅ ' . htmlspecialchars($t['title']) . "<br>";
+        }
+        exit;
+    }
+    /* ➜ 2.  hand the real playlist title to the feed builder */
+    buildRssFeed($tracks, $playlistTitle);
+}
 
-		if($validate) {
-			$row_format;
+/* ---- Build RSS standalone function ------------------------------------- */
+/* ➜ 3. accept playlist title as second argument */
+function buildRssFeed(array $tracks, string $playlistTitle = 'Plex Playlist'): void
+{
+    global $baseurl;
 
-			if(!file_exists($item['Path'])) {
-				$row_format = "❌ <strong style='color: #ff0000;'>%s</strong>\n";
-			}
-			else {
-				$row_format = "✅ %s\n";
-			}
+    $dom = new DOMDocument('1.0', 'utf-8');
+    $dom->formatOutput = true;
 
-			echo sprintf($row_format, $item['Path']) ;
-		}
-	}
+    $rss = $dom->createElement('rss');
+    $rss->setAttribute('version', '2.0');
+    $rss->setAttribute('xmlns:itunes', 'http://www.itunes.com/dtds/podcast-1.0.dtd');
+    $rss->setAttribute('xmlns:content', 'http://purl.org/rss/1.0/modules/content/');
 
-    $root->appendChild($channel_node);
-	$dom->appendChild($root);
+    $channel = $dom->createElement('channel');
+    /* ➜ 4.  use dynamic playlist title in RSS */
+    $channel->appendChild($dom->createElement('title', htmlspecialchars($playlistTitle)));
+    $channel->appendChild($dom->createElement('itunes:author', 'Plex'));
+    $owner = $dom->createElement('itunes:owner');
+    $owner->appendChild($dom->createElement('itunes:name', 'Plex'));
+    $channel->appendChild($owner);
+    $channel->appendChild($dom->createElement('lastBuildDate', date('r')));
 
+    $episode = 1;
+    foreach ($tracks as $it) {
+        $itemNode = $dom->createElement('item');
+        $itemNode->appendChild($dom->createElement('title', htmlspecialchars($it['title'])));
+        $guid = $dom->createElement('guid', bin2hex(random_bytes(16)));
+        $guid->setAttribute('isPermaLink', 'false');
+        $itemNode->appendChild($guid);
+        $itemNode->appendChild($dom->createElement('pubDate', date('r', strtotime("-$episode days"))));
+        $itemNode->appendChild($dom->createElement('itunes:episode', $episode));
 
-	if(!$validate) {
-		Header('Content-type: text/xml');
-		print $dom->saveXML();
-	}
+        /* enclosure points to local proxy, hides token */
+        $enclosure = $dom->createElement('enclosure');
+        $enclosure->setAttribute('url',
+            $baseurl . '?proxy=' . $it['partId'] . '&f=' . urlencode($it['fileName']));
+        $enclosure->setAttribute('type', 'audio/mpeg');
+        $itemNode->appendChild($enclosure);
+
+        $channel->appendChild($itemNode);
+        $episode++;
+    }
+
+    $rss->appendChild($channel);
+    $dom->appendChild($rss);
+    header('Content-Type: application/rss+xml; charset=utf-8');
+    echo $dom->saveXML();
+}
+
+/*  RANGE-AWARE STREAMING  --------------------------------------------------*/
+function streamSongProxy(string $partId, string $fileName): void
+{
+    global $plex_url, $plex_token;
+
+    /* basic sanity checks */
+    $partId   = trim($partId);
+    if ($partId === '' || !ctype_digit($partId)) {
+        http_response_code(400);
+        exit('Bad request');
+    }
+
+    $fileName = trim(urldecode($fileName));
+    if ($fileName === '') {
+        http_response_code(400);
+        exit('Bad request');
+    }
+
+    /* build authenticated Plex download URL – filename MUST be encoded */
+    $url = "{$plex_url}/library/parts/{$partId}/" .
+           rawurlencode($fileName) .
+           "?download=1&X-Plex-Token={$plex_token}";
+
+    /* forward headers & stream file to client */
+    $opts = [
+        'http' => [
+            'method'           => 'GET',
+            'header'           => implode("\r\n", [
+                'User-Agent: ' . ($_SERVER['HTTP_USER_AGENT'] ?? 'PlexPod/1.0'),
+                isset($_SERVER['HTTP_RANGE']) ? 'Range: ' . $_SERVER['HTTP_RANGE'] : '',
+            ]),
+            'follow_location'  => 0,
+            'ignore_errors'    => true,
+        ],
+        'ssl' => [
+            'verify_peer'      => false,
+            'verify_peer_name' => false,
+        ],
+    ];
+    $ctx  = stream_context_create($opts);
+    $fh   = @fopen($url, 'rb', false, $ctx);
+
+    if (!$fh) {
+        http_response_code(500);
+        exit('Plex unreachable');
+    }
+
+    /* copy Plex response headers to client */
+    foreach (stream_get_meta_data($fh)['wrapper_data'] as $h) {
+        if (stripos($h, 'HTTP/') === 0 ||
+            stripos($h, 'Content-Type') === 0 ||
+            stripos($h, 'Content-Range') === 0 ||
+            stripos($h, 'Content-Length') === 0 ||
+            stripos($h, 'Accept-Ranges') === 0) {
+            header($h);
+        }
+    }
+
+    /* stream bytes and finish */
+    fpassthru($fh);
+    fclose($fh);
+    
+    /* ---------- NEW: mark played ---------- */
+    $ratingKey = $partId;          // Plex uses the same id for the track
+    $markUrl   = "{$plex_url}/:/scrobble?identifier=com.plexapp.plugins.library&key={$ratingKey}&X-Plex-Token={$plex_token}";
+    @file_get_contents($markUrl, false, $ctx);   // fire-and-forget
+    
+    exit;
 }
 
 
 
 
-function streamSong($file) {
-	// Mostly taken from https://github.com/tuxxin/MP4Streaming
 
-	if(!file_exists($file)) {
-	  echo "no file";
-	  exit;
-	}
-	$fp = @fopen($file, 'rb');
-
-	$size = filesize($file); // File size
-	$length = $size; // Content length
-	$start = 0; // Start byte
-	$end = $size - 1; // End byte
-
-
-	header('Content-type: audio/m4a');
-	//header("Accept-Ranges: 0-$length");
-	header("Accept-Ranges: bytes");
-	if (isset($_SERVER['HTTP_RANGE'])) {
-		$c_start = $start;
-		$c_end = $end;
-		list(, $range) = explode('=', $_SERVER['HTTP_RANGE'], 2);
-		if (strpos($range, ',') !== false) {
-			header('HTTP/1.1 416 Requested Range Not Satisfiable');
-			header("Content-Range: bytes $start-$end/$size");
-			exit;
-		}
-		
-		if ($range == '-') {
-			$c_start = $size - substr($range, 1);
-		}else{
-			$range = explode('-', $range);
-			$c_start = $range[0];
-			$c_end = (isset($range[1]) && is_numeric($range[1])) ? $range[1] : $size;
-		}
-		$c_end = ($c_end > $end) ? $end : $c_end;
-		
-		if ($c_start > $c_end || $c_start > $size - 1 || $c_end >= $size) {
-			header('HTTP/1.1 416 Requested Range Not Satisfiable');
-			header("Content-Range: bytes $start-$end/$size");
-			exit;
-		}
-		$start = $c_start;
-		$end = $c_end;
-		$length = $end - $start + 1;
-		fseek($fp, $start);
-		header('HTTP/1.1 206 Partial Content');
-	}
-	header("Content-Range: bytes $start-$end/$size");
-	header("Content-Length: ".$length);
-	$buffer = 1024 * 8;
-	while(!feof($fp) && ($p = ftell($fp)) <= $end) {
-		if ($p + $buffer > $end) {
-			$buffer = $end - $p + 1;
-		}
-		set_time_limit(0);
-		echo fread($fp, $buffer);
-		flush();
-	}
-	fclose($fp);
-	exit();
-}
