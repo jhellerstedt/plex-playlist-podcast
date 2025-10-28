@@ -241,11 +241,14 @@ function concatPlaylist(string $playlistId): void
                  '?download=1&X-Plex-Token=' . $plex_token;
         @readfile($url, false, $noVerify);          // send audio
 
-        /* scrobble (fixed - use metadata endpoint) */
+        /* scrobble (use Timeline API) */
         $ratingKey = (string)$t['ratingKey'];
-        $scrobbleUrl = "{$plex_url}/library/metadata/{$ratingKey}/scrobble?X-Plex-Token={$plex_token}";
+        $duration = (int)($media['duration'] ?? 0);
+        $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$ratingKey}&key={$ratingKey}"
+                      . "&state=stopped&time={$duration}&duration={$duration}"
+                      . "&X-Plex-Token={$plex_token}";
 
-        $scrobbleCtx = stream_context_create([
+        $timelineCtx = stream_context_create([
             'http' => [
                 'method'  => 'POST',
                 'header'  => "Content-Length: 0\r\nUser-Agent: PlexPlaylistPodcast/1.0\r\nAccept: */*\r\n",
@@ -257,12 +260,11 @@ function concatPlaylist(string $playlistId): void
             ],
         ]);
 
-        $resp = @file_get_contents($scrobbleUrl, false, $scrobbleCtx);
+        $resp = @file_get_contents($timelineUrl, false, $timelineCtx);
         if ($resp === false) {
-            error_log('[concat-scrobble] FAIL '.$scrobbleUrl);
+            error_log('[concat-timeline] FAIL '.$timelineUrl);
         } else {
-            $log = $resp === '' ? 'EMPTY' : trim($resp);
-            error_log('[concat-scrobble] '.$log.' '.$scrobbleUrl);
+            error_log('[concat-timeline] OK track='.$ratingKey);
         }
     }
 }
@@ -283,12 +285,24 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     $fileName = trim(urldecode($fileName));
     if ($fileName === '') { http_response_code(400); exit('Bad request'); }
 
-    /* ---------- 2. scrobble BEFORE streaming (register at start) ---------- */
+    /* ---------- 2. mark as played BEFORE streaming (use Timeline API) ---------- */
     $scrobbleKey = ($ratingKey && ctype_digit($ratingKey)) ? $ratingKey : $partId;
-    $scrobbleUrl = "{$plex_url}/library/metadata/{$scrobbleKey}/scrobble?X-Plex-Token={$plex_token}";
-    error_log('[scrobble] using key='.$scrobbleKey.' (before stream)');
-
-    $scrobbleCtx = stream_context_create([
+    
+    // Get track duration by fetching metadata
+    $trackCtx = stream_context_create([
+        'http' => ['ignore_errors' => true],
+        'ssl'  => ['verify_peer' => false, 'verify_peer_name' => false],
+    ]);
+    $trackUrl = "{$plex_url}/library/metadata/{$scrobbleKey}?X-Plex-Token={$plex_token}";
+    $trackXml = @simplexml_load_string(@file_get_contents($trackUrl, false, $trackCtx));
+    $duration = $trackXml ? (int)($trackXml->Media[0]['duration'] ?? 0) : 0;
+    
+    // Send timeline update to mark as played
+    $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
+                  . "&state=stopped&time={$duration}&duration={$duration}"
+                  . "&X-Plex-Token={$plex_token}";
+    
+    $timelineCtx = stream_context_create([
         'http' => [
             'method'  => 'POST',
             'header'  => "Content-Length: 0\r\nUser-Agent: PlexPlaylistPodcast/1.0\r\nAccept: */*\r\n",
@@ -300,13 +314,8 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
         ],
     ]);
 
-    $resp = @file_get_contents($scrobbleUrl, false, $scrobbleCtx);
-    if ($resp === false) {
-        error_log('[proxy-scrobble] FAIL '.$scrobbleUrl);
-    } else {
-        $log = $resp === '' ? 'EMPTY' : trim($resp);
-        error_log('[proxy-scrobble] '.$log);
-    }
+    @file_get_contents($timelineUrl, false, $timelineCtx);
+    error_log('[proxy-timeline] track='.$scrobbleKey.' duration='.$duration);
 
     /* ---------- 3. stream the track ---------- */
     $url = "{$plex_url}/library/parts/{$partId}/".rawurlencode($fileName)."?download=1&X-Plex-Token={$plex_token}";
