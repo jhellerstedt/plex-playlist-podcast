@@ -166,7 +166,13 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
             $item->appendChild($dom->createElement('itunes:season', 1));
 
             $enc = $dom->createElement('enclosure');
-            $enc->setAttribute('url', $baseurl.'?proxy='.$t['partId'].'&f='.urlencode($t['fileName']).'&r='.$t['ratingKey']);
+            $enc->setAttribute(
+                'url',
+                $baseurl.'?proxy='.$t['partId'].
+                           '&f='.urlencode($t['fileName']).
+                           '&r='.$t['ratingKey'].
+                           '&token='.urlencode($plex_token)   // <-- added
+            );
             $enc->setAttribute('type', 'audio/mpeg');
             $item->appendChild($enc);
             $channel->appendChild($item);
