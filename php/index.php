@@ -125,7 +125,7 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate): void
 /* ---------- RSS builder ---------- */
 function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId): void
 {
-    global $baseurl;
+    global $baseurl, $plex_token;
     $dom = new DOMDocument('1.0', 'utf-8');
     $dom->formatOutput = true;
     $rss = $dom->createElement('rss');
