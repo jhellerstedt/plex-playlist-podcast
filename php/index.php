@@ -154,14 +154,14 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
             $guid = $dom->createElement('guid', $playlistId.'-'.$episode);
             $guid->setAttribute('isPermaLink', 'false');
             $item->appendChild($guid);
-            
+
             // Sequential dates (same day for continuous playback)
             $item->appendChild($dom->createElement('pubDate', date('r', strtotime("-{$episode} minutes"))));
-            
+
             // iTunes episode metadata for series/season
             $item->appendChild($dom->createElement('itunes:episode', $totalTracks - $episode + 1)); // newest first
             $item->appendChild($dom->createElement('itunes:season', 1));
-            
+
             $enc = $dom->createElement('enclosure');
             $enc->setAttribute('url', $baseurl.'?proxy='.$t['partId'].'&f='.urlencode($t['fileName']).'&r='.$t['ratingKey']);
             $enc->setAttribute('type', 'audio/mpeg');
@@ -228,12 +228,13 @@ function concatPlaylist(string $playlistId): void
                      '?download=1&X-Plex-Token=' . $plex_token;
             $hdr   = @get_headers($url, true, $noVerify);
             $trackSize = (int) ($hdr['Content-Length'] ?? 0);
-            
+
             $tracks[] = [
                 'ratingKey' => (string)$t['ratingKey'],
                 'duration' => (int)($media['duration'] ?? 0),
                 'startByte' => $totalSize,
                 'endByte' => $totalSize + $trackSize - 1,
+                'size' => $trackSize,
                 'size' => $trackSize,
                 'url' => $url,
             ];
@@ -262,57 +263,65 @@ function concatPlaylist(string $playlistId): void
     header('Cache-Control: no-cache');
 
     /* 4. Stream only requested range and track which tracks were sent */
-    $tracksScrobbled = [];
     $currentPos = 0;
-    
+
     foreach ($tracks as $track) {
         if ($currentPos + $track['size'] <= $rangeStart) {
             /* Skip this track - it's before requested range */
             $currentPos += $track['size'];
             continue;
         }
-        
+
         if ($currentPos > $rangeEnd) {
             /* Stop - we're past requested range */
             break;
         }
-        
+
         /* Track is partially or fully in range - stream it */
         $trackStartInRange = max(0, $rangeStart - $currentPos);
         $trackEndInRange = min($track['size'] - 1, $rangeEnd - $currentPos);
         $bytesToSend = $trackEndInRange - $trackStartInRange + 1;
-        
+
         /* Open track file and seek to start position */
         $handle = @fopen($track['url'], 'rb', false, $noVerify);
         if ($handle && $trackStartInRange > 0) {
             fseek($handle, $trackStartInRange);
         }
-        
+
         /* Send only the requested bytes */
         $sent = 0;
+        $scrobbledThisTrack = false;
         while ($sent < $bytesToSend && !feof($handle)) {
             $chunk = @fread($handle, min(8192, $bytesToSend - $sent));
             if ($chunk === false) break;
             echo $chunk;
             $sent += strlen($chunk);
+            if (!$scrobbledThisTrack) {
+                scrobbleOnce($track['ratingKey'], $track['duration']);
+                $scrobbledThisTrack = true;
+            }
         }
         fclose($handle);
-        
-        /* This track was sent (at least partially) - will scrobble it */
-        if ($bytesToSend > 0) {
-            $tracksScrobbled[] = $track;
-        }
-        
+
         $currentPos += $track['size'];
-        
+
         if ($currentPos > $rangeEnd) {
             break; /* Past requested range */
         }
     }
-    
-    /* 5. Scrobble tracks that were actually sent */
+}
+
+/* ---------- helper: scrobble a single ratingKey exactly once ---------- */
+function scrobbleOnce(string $ratingKey, int $durationMs): void
+{
+    static $done = [];                       // memory-of-fire
+    if (isset($done[$ratingKey])) return;   // already scrobbled this request
+    $done[$ratingKey] = true;
+
+    global $plex_url, $plex_token;
     $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
-    $timelineCtx = stream_context_create([
+
+    $ctx = stream_context_create([
         'http' => [
             'method'  => 'POST',
             'header'  => "Content-Length: 0\r\n"
@@ -320,26 +329,18 @@ function concatPlaylist(string $playlistId): void
                        . "Accept: */*\r\n"
                        . "X-Plex-Client-Identifier: {$clientId}\r\n",
             'ignore_errors' => true,
+            'timeout' => 2,
         ],
-        'ssl' => [
-            'verify_peer'      => false,
-            'verify_peer_name' => false,
-        ],
+        'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
     ]);
-    
-    foreach ($tracksScrobbled as $track) {
-        $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$track['ratingKey']}&key={$track['ratingKey']}"
-                      . "&state=stopped&time={$track['duration']}&duration={$track['duration']}"
-                      . "&X-Plex-Token={$plex_token}";
-        @file_get_contents($timelineUrl, false, $timelineCtx);
-        error_log('[concat-scrobble] track='.$track['ratingKey']);
-    }
+
+    $url = "{$plex_url}/:/timeline?ratingKey={$ratingKey}&key={$ratingKey}"
+         . "&state=stopped&time={$durationMs}&duration={$durationMs}"
+         . "&X-Plex-Token={$plex_token}";
+
+    @file_get_contents($url, false, $ctx);
+    error_log('[concat-scrobble] track=' . $ratingKey);
 }
-
-
-
-
-
 
 /* ---------- proxy + scrobble ---------- */
 function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, string $ratingKey = ''): void
@@ -354,7 +355,7 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
 
     /* ---------- 2. mark as played BEFORE streaming (use Timeline API) ---------- */
     $scrobbleKey = ($ratingKey && ctype_digit($ratingKey)) ? $ratingKey : $partId;
-    
+
     // Get track duration by fetching metadata
     $trackCtx = stream_context_create([
         'http' => ['ignore_errors' => true],
@@ -363,12 +364,12 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     $trackUrl = "{$plex_url}/library/metadata/{$scrobbleKey}?X-Plex-Token={$plex_token}";
     $trackXml = @simplexml_load_string(@file_get_contents($trackUrl, false, $trackCtx));
     $duration = $trackXml ? (int)($trackXml->Media[0]['duration'] ?? 0) : 0;
-    
+
     // Send timeline update to mark as played
     $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
                   . "&state=stopped&time={$duration}&duration={$duration}"
                   . "&X-Plex-Token={$plex_token}";
-    
+
     $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
     $timelineCtx = stream_context_create([
         'http' => [
@@ -408,7 +409,7 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     }
     fpassthru($fh);
     fclose($fh);
-    
+
 
     /* ---------- 3. all done ---------- */
     exit;
