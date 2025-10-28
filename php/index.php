@@ -56,7 +56,7 @@ function plexGet(string $endpoint): \SimpleXMLElement
 
 function listPlaylists(): void
 {
-    global $baseurl;
+    global $baseurl, $plex_token;
     try {
         $xml = plexGet('/playlists');
     } catch (RuntimeException $e) {
