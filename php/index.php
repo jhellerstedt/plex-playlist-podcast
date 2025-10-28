@@ -5,7 +5,7 @@
  *  an iTunes-compatible RSS feed or validates the contained paths.
  *----------------------------------------------------------------------------*/
 include 'settings.php';          // defines: $baseurl, $plex_url, $plex_token
-define('PODCAST_MODE', 'single');   // 'concat' = single long episode
+define('PODCAST_MODE', 'concat');   // 'concat' = single long episode
                                      // anything else = classic per-track feed
 
 /*  ROUTING  ------------------------------------------------------------------*/
@@ -146,15 +146,22 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
         $item->appendChild($enc);
         $channel->appendChild($item);
     } else {                                      // classic per-track
+        $totalTracks = count($tracks);
         $episode = 1;
         foreach ($tracks as $t) {
             $item = $dom->createElement('item');
             $item->appendChild($dom->createElement('title', htmlspecialchars($t['title'])));
-            $guid = $dom->createElement('guid', $t['partId']);
+            $guid = $dom->createElement('guid', $playlistId.'-'.$episode);
             $guid->setAttribute('isPermaLink', 'false');
             $item->appendChild($guid);
-            $item->appendChild($dom->createElement('pubDate', date('r', strtotime("-$episode days"))));
-            $item->appendChild($dom->createElement('itunes:episode', $episode));
+            
+            // Sequential dates (same day for continuous playback)
+            $item->appendChild($dom->createElement('pubDate', date('r', strtotime("-{$episode} minutes"))));
+            
+            // iTunes episode metadata for series/season
+            $item->appendChild($dom->createElement('itunes:episode', $totalTracks - $episode + 1)); // newest first
+            $item->appendChild($dom->createElement('itunes:season', 1));
+            
             $enc = $dom->createElement('enclosure');
             $enc->setAttribute('url', $baseurl.'?proxy='.$t['partId'].'&f='.urlencode($t['fileName']).'&r='.$t['ratingKey']);
             $enc->setAttribute('type', 'audio/mpeg');
@@ -208,8 +215,9 @@ function concatPlaylist(string $playlistId): void
 
     $noVerify = stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]]);
 
-    /* 1. total size calculation (unchanged) */
-    $size = 0;
+    /* 1. Build track index with byte offsets */
+    $tracks = [];
+    $totalSize = 0;
     try {
         $xml = plexGet('/playlists/' . $playlistId . '/items');
         foreach ($xml->Track as $t) {
@@ -219,20 +227,90 @@ function concatPlaylist(string $playlistId): void
                      rawurlencode(basename($part['file'])) .
                      '?download=1&X-Plex-Token=' . $plex_token;
             $hdr   = @get_headers($url, true, $noVerify);
-            $size += (int) ($hdr['Content-Length'] ?? 0);
+            $trackSize = (int) ($hdr['Content-Length'] ?? 0);
+            
+            $tracks[] = [
+                'ratingKey' => (string)$t['ratingKey'],
+                'duration' => (int)($media['duration'] ?? 0),
+                'startByte' => $totalSize,
+                'endByte' => $totalSize + $trackSize - 1,
+                'size' => $trackSize,
+                'url' => $url,
+            ];
+            $totalSize += $trackSize;
         }
     } catch (RuntimeException) {
         http_response_code(404);
         exit('Playlist not found');
     }
 
-    /* 2. Apple headers (unchanged) */
+    /* 2. Parse HTTP Range header */
+    $rangeStart = 0;
+    $rangeEnd = $totalSize - 1;
+    if (isset($_SERVER['HTTP_RANGE'])) {
+        preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $matches);
+        $rangeStart = (int)$matches[1];
+        $rangeEnd = $matches[2] !== '' ? (int)$matches[2] : $totalSize - 1;
+        http_response_code(206);
+        header("Content-Range: bytes {$rangeStart}-{$rangeEnd}/{$totalSize}");
+    }
+
+    /* 3. Send headers */
     header('Content-Type: audio/mpeg');
     header('Accept-Ranges: bytes');
-    header('Content-Length: ' . $size);
+    header('Content-Length: ' . ($rangeEnd - $rangeStart + 1));
     header('Cache-Control: no-cache');
 
-    /* 3. stream & scrobble each track */
+    /* 4. Stream only requested range and track which tracks were sent */
+    $tracksScrobbled = [];
+    $currentPos = 0;
+    
+    foreach ($tracks as $track) {
+        if ($currentPos + $track['size'] <= $rangeStart) {
+            /* Skip this track - it's before requested range */
+            $currentPos += $track['size'];
+            continue;
+        }
+        
+        if ($currentPos > $rangeEnd) {
+            /* Stop - we're past requested range */
+            break;
+        }
+        
+        /* Track is partially or fully in range - stream it */
+        $trackStartInRange = max(0, $rangeStart - $currentPos);
+        $trackEndInRange = min($track['size'] - 1, $rangeEnd - $currentPos);
+        $bytesToSend = $trackEndInRange - $trackStartInRange + 1;
+        
+        /* Open track file and seek to start position */
+        $handle = @fopen($track['url'], 'rb', false, $noVerify);
+        if ($handle && $trackStartInRange > 0) {
+            fseek($handle, $trackStartInRange);
+        }
+        
+        /* Send only the requested bytes */
+        $sent = 0;
+        while ($sent < $bytesToSend && !feof($handle)) {
+            $chunk = @fread($handle, min(8192, $bytesToSend - $sent));
+            if ($chunk === false) break;
+            echo $chunk;
+            $sent += strlen($chunk);
+        }
+        fclose($handle);
+        
+        /* This track was sent (at least partially) - will scrobble it */
+        if ($bytesToSend > 0) {
+            $tracksScrobbled[] = $track;
+        }
+        
+        $currentPos += $track['size'];
+        
+        if ($currentPos > $rangeEnd) {
+            break; /* Past requested range */
+        }
+    }
+    
+    /* 5. Scrobble tracks that were actually sent */
     $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
     $timelineCtx = stream_context_create([
         'http' => [
@@ -249,26 +327,12 @@ function concatPlaylist(string $playlistId): void
         ],
     ]);
     
-    foreach ($xml->Track as $t) {
-        $media = $t->Media;
-        $part  = $media->Part;
-        $ratingKey = (string)$t['ratingKey'];
-        $duration = (int)($media['duration'] ?? 0);
-        
-        /* stream the track */
-        $url   = "{$plex_url}/library/parts/{$part['id']}/" .
-                 rawurlencode(basename($part['file'])) .
-                 '?download=1&X-Plex-Token=' . $plex_token;
-        @readfile($url, false, $noVerify);          // send audio
-        
-        /* In concat mode, scrobbling each track individually doesn't work because:
-           1. All tracks are sent as one continuous stream
-           2. We can't detect when the user stops playback (connection stays open while buffered)
-           3. By the time we check, all data has been sent anyway
-           
-           Best practice: Just accept that concat mode tracks won't show scrobble data, or use 
-           per-track RSS mode if scrobbling accuracy is more important than continuous playback.
-        */
+    foreach ($tracksScrobbled as $track) {
+        $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$track['ratingKey']}&key={$track['ratingKey']}"
+                      . "&state=stopped&time={$track['duration']}&duration={$track['duration']}"
+                      . "&X-Plex-Token={$plex_token}";
+        @file_get_contents($timelineUrl, false, $timelineCtx);
+        error_log('[concat-scrobble] track='.$track['ratingKey']);
     }
 }
 
