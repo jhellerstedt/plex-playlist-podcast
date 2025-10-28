@@ -237,11 +237,42 @@ function concatPlaylist(string $playlistId): void
         $media = $t->Media;
         $part  = $media->Part;
         
-        /* mark track as playing BEFORE streaming starts */
         $ratingKey = (string)$t['ratingKey'];
         $duration = (int)($media['duration'] ?? 0);
         $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
         
+        /* stream the track first */
+        $url   = "{$plex_url}/library/parts/{$part['id']}/" .
+                 rawurlencode(basename($part['file'])) .
+                 '?download=1&X-Plex-Token=' . $plex_token;
+        @readfile($url, false, $noVerify);          // send audio
+        
+        /* check if client disconnected - if so, mark this track as played but stop processing */
+        if (connection_aborted()) {
+            error_log('[concat-timeline] client disconnected, marking track='.$ratingKey.' as incomplete');
+            /* mark as played but not complete (just started listening) */
+            $timelineCtx = stream_context_create([
+                'http' => [
+                    'method'  => 'POST',
+                    'header'  => "Content-Length: 0\r\n"
+                               . "User-Agent: PlexPlaylistPodcast/1.0\r\n"
+                               . "Accept: */*\r\n"
+                               . "X-Plex-Client-Identifier: {$clientId}\r\n",
+                    'ignore_errors' => true,
+                ],
+                'ssl' => [
+                    'verify_peer'      => false,
+                    'verify_peer_name' => false,
+                ],
+            ]);
+            $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$ratingKey}&key={$ratingKey}"
+                          . "&state=stopped&time=5000&duration={$duration}"
+                          . "&X-Plex-Token={$plex_token}";
+            @file_get_contents($timelineUrl, false, $timelineCtx);
+            break;
+        }
+        
+        /* mark track as completely played */
         $timelineCtx = stream_context_create([
             'http' => [
                 'method'  => 'POST',
@@ -256,30 +287,11 @@ function concatPlaylist(string $playlistId): void
                 'verify_peer_name' => false,
             ],
         ]);
-        
-        $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$ratingKey}&key={$ratingKey}"
-                      . "&state=playing&time=0&duration={$duration}"
-                      . "&X-Plex-Token={$plex_token}";
-        @file_get_contents($timelineUrl, false, $timelineCtx);
-        
-        /* now stream the track */
-        $url   = "{$plex_url}/library/parts/{$part['id']}/" .
-                 rawurlencode(basename($part['file'])) .
-                 '?download=1&X-Plex-Token=' . $plex_token;
-        @readfile($url, false, $noVerify);          // send audio
-        
-        /* check if client disconnected - if so, stop processing */
-        if (connection_aborted()) {
-            error_log('[concat-timeline] client disconnected after track='.$ratingKey);
-            break;
-        }
-        
-        /* mark track as complete after streaming */
         $completeUrl = "{$plex_url}/:/timeline?ratingKey={$ratingKey}&key={$ratingKey}"
                       . "&state=stopped&time={$duration}&duration={$duration}"
                       . "&X-Plex-Token={$plex_token}";
         @file_get_contents($completeUrl, false, $timelineCtx);
-        error_log('[concat-timeline] track='.$ratingKey.' complete');
+        error_log('[concat-timeline] track='.$ratingKey.' marked as complete');
     }
 }
 
