@@ -1,38 +1,40 @@
 <?php
 /*------------------------------------------------------------------------------
- *  Plex → Podcast RSS  (refactored from the Jellyfin version)
- *  Reads Plex playlists from API and emits
- *  an iTunes-compatible RSS feed or validates the contained paths.
+ *  Plex → Podcast RSS  (token-per-URL edition)
  *----------------------------------------------------------------------------*/
-include 'settings.php';          // defines: $baseurl, $plex_url, $plex_token
+include 'settings.php';          // defines: $baseurl, $plex_url  (NO TOKEN)
 define('PODCAST_MODE', 'concat');   // 'concat' = single long episode
-                                     // anything else = classic per-track feed
 
-/*  ROUTING  ------------------------------------------------------------------*/
-if (isset($_GET['stream'])) {                     // 1️⃣  NEW: continuous MP3
+/*  ----------  common helper: read token once  ----------  */
+$plex_token = $_GET['token'] ?? '';
+
+/*  ----------  ROUTING  ----------  */
+if (isset($_GET['stream'])) {                     // 1️⃣  continuous MP3
     $id = strtok($_GET['stream'], '.');           // strip fake ".mp3"
-    concatPlaylist($id);
+    concatPlaylist($id, $plex_token);
     exit;
 }
-if (isset($_GET['m3u'])) {                        // 2️⃣  segmented M3U (kept)
+if (isset($_GET['m3u'])) {                        // 2️⃣  segmented M3U
     header('Content-Type: audio/x-mpegurl');
-    echo buildM3u($_GET['m3u']);
+    echo buildM3u($_GET['m3u'], $plex_token);
     exit;
 }
 if (isset($_GET['plexKey'])) {
     $key       = urldecode($_GET['plexKey']);
     $randomize = urldecode($_GET['randomize']) === 'true';
-    processPlaylist($key, $randomize, false);
+    processPlaylist($key, $randomize, false, $plex_token);
 } elseif (isset($_GET['validate'])) {
     $key = urldecode($_GET['validate']);
     outputHtml();
-    processPlaylist($key, false, true);
+    processPlaylist($key, false, true, $plex_token);
 } elseif (isset($_GET['proxy'])) {               // 3️⃣  per-track proxy
-    streamSongProxy($_GET['proxy'], $_GET['f'] ?? '', $_GET['ts'] ?? 0, $_GET['r'] ?? '');
+    streamSongProxy($_GET['proxy'], $_GET['f'] ?? '', $_GET['ts'] ?? 0,
+                    $_GET['r'] ?? '', $plex_token);
 } else {
     outputHtml();
-    listPlaylists();
+    listPlaylists($plex_token);                    // list page
 }
+
 
 /* ---------- helpers ---------- */
 function outputHtml() { echo "<html><head><link rel='stylesheet' href='styles.css'></head><body>"; }
