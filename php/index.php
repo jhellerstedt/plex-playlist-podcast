@@ -248,10 +248,14 @@ function concatPlaylist(string $playlistId): void
                       . "&state=stopped&time={$duration}&duration={$duration}"
                       . "&X-Plex-Token={$plex_token}";
 
+        $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
         $timelineCtx = stream_context_create([
             'http' => [
                 'method'  => 'POST',
-                'header'  => "Content-Length: 0\r\nUser-Agent: PlexPlaylistPodcast/1.0\r\nAccept: */*\r\n",
+                'header'  => "Content-Length: 0\r\n"
+                           . "User-Agent: PlexPlaylistPodcast/1.0\r\n"
+                           . "Accept: */*\r\n"
+                           . "X-Plex-Client-Identifier: {$clientId}\r\n",
                 'ignore_errors' => true,
             ],
             'ssl' => [
@@ -304,10 +308,14 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
                   . "&state=stopped&time={$duration}&duration={$duration}"
                   . "&X-Plex-Token={$plex_token}";
     
+    $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
     $timelineCtx = stream_context_create([
         'http' => [
             'method'  => 'POST',
-            'header'  => "Content-Length: 0\r\nUser-Agent: PlexPlaylistPodcast/1.0\r\nAccept: */*\r\n",
+            'header'  => "Content-Length: 0\r\n"
+                       . "User-Agent: PlexPlaylistPodcast/1.0\r\n"
+                       . "Accept: */*\r\n"
+                       . "X-Plex-Client-Identifier: {$clientId}\r\n",
             'ignore_errors' => true,
         ],
         'ssl' => [
