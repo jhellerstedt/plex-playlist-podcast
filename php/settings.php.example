@@ -17,7 +17,7 @@ $plex_url = 'https://plex.example.com:32400';
  *  - Look in the address bar for X-Plex-Token=XXXXXXXXXXXXXXXXXXXX
  *  - Copy that value (or use the “Get Info” bookmarklet in the Plex docs)
  */
-$plex_token = 'YOUR_X_PLEX_TOKEN';
+/* $plex_token = 'YOUR_X_PLEX_TOKEN'; deprecated; now supplied by user in URL */
 
 /*  OPTIONAL: if you ever enable local-streaming fallback you can re-add
     $media_root here; for the API-only refactor it is NOT used. */

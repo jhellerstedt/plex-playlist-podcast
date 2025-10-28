@@ -1,38 +1,40 @@
 <?php
 /*------------------------------------------------------------------------------
- *  Plex → Podcast RSS  (refactored from the Jellyfin version)
- *  Reads Plex playlists from API and emits
- *  an iTunes-compatible RSS feed or validates the contained paths.
+ *  Plex → Podcast RSS  (token-per-URL edition)
  *----------------------------------------------------------------------------*/
-include 'settings.php';          // defines: $baseurl, $plex_url, $plex_token
+include 'settings.php';          // defines: $baseurl, $plex_url  (NO TOKEN)
 define('PODCAST_MODE', 'concat');   // 'concat' = single long episode
-                                     // anything else = classic per-track feed
 
-/*  ROUTING  ------------------------------------------------------------------*/
-if (isset($_GET['stream'])) {                     // 1️⃣  NEW: continuous MP3
+/*  ----------  common helper: read token once  ----------  */
+$plex_token = $_GET['token'] ?? '';
+
+/*  ----------  ROUTING  ----------  */
+if (isset($_GET['stream'])) {                     // 1️⃣  continuous MP3
     $id = strtok($_GET['stream'], '.');           // strip fake ".mp3"
-    concatPlaylist($id);
+    concatPlaylist($id, $plex_token);
     exit;
 }
-if (isset($_GET['m3u'])) {                        // 2️⃣  segmented M3U (kept)
+if (isset($_GET['m3u'])) {                        // 2️⃣  segmented M3U
     header('Content-Type: audio/x-mpegurl');
-    echo buildM3u($_GET['m3u']);
+    echo buildM3u($_GET['m3u'], $plex_token);
     exit;
 }
 if (isset($_GET['plexKey'])) {
     $key       = urldecode($_GET['plexKey']);
     $randomize = urldecode($_GET['randomize']) === 'true';
-    processPlaylist($key, $randomize, false);
+    processPlaylist($key, $randomize, false, $plex_token);
 } elseif (isset($_GET['validate'])) {
     $key = urldecode($_GET['validate']);
     outputHtml();
-    processPlaylist($key, false, true);
+    processPlaylist($key, false, true, $plex_token);
 } elseif (isset($_GET['proxy'])) {               // 3️⃣  per-track proxy
-    streamSongProxy($_GET['proxy'], $_GET['f'] ?? '', $_GET['ts'] ?? 0, $_GET['r'] ?? '');
+    streamSongProxy($_GET['proxy'], $_GET['f'] ?? '', $_GET['ts'] ?? 0,
+                    $_GET['r'] ?? '', $plex_token);
 } else {
     outputHtml();
-    listPlaylists();
+    listPlaylists($plex_token);                    // list page
 }
+
 
 /* ---------- helpers ---------- */
 function outputHtml() { echo "<html><head><link rel='stylesheet' href='styles.css'></head><body>"; }
@@ -54,7 +56,7 @@ function plexGet(string $endpoint): \SimpleXMLElement
 
 function listPlaylists(): void
 {
-    global $baseurl;
+    global $baseurl, $plex_token;
     try {
         $xml = plexGet('/playlists');
     } catch (RuntimeException $e) {
@@ -75,10 +77,11 @@ function listPlaylists(): void
         $title = htmlspecialchars($pl['title']);
         $rows .= "<tr>
                     <td>{$title}</td>
-                    <td><a href='{$baseurl}?plexKey={$key}&randomize=false'>⬇️</a></td>
-                    <td><a href='{$baseurl}?plexKey={$key}&randomize=true'>🔀</a></td>
-                    <td><a href='{$baseurl}?validate={$key}'>🤖</a></td>
+                    <td><a href='{$baseurl}?plexKey={$key}&randomize=false&token=".htmlspecialchars($plex_token)."'>⬇️</a></td>
+                    <td><a href='{$baseurl}?plexKey={$key}&randomize=true&token=".htmlspecialchars($plex_token)."'>🔀</a></td>
+                    <td><a href='{$baseurl}?validate={$key}&token=".htmlspecialchars($plex_token)."'>🤖</a></td>
                   </tr>";
+        
     }
 
     echo '<h1>Plex Playlists</h1><table>
@@ -122,7 +125,7 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate): void
 /* ---------- RSS builder ---------- */
 function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId): void
 {
-    global $baseurl;
+    global $baseurl, $plex_token;
     $dom = new DOMDocument('1.0', 'utf-8');
     $dom->formatOutput = true;
     $rss = $dom->createElement('rss');
@@ -141,7 +144,7 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
         $item->appendChild($guid);
         $item->appendChild($dom->createElement('pubDate', date('r')));
         $enc = $dom->createElement('enclosure');
-        $enc->setAttribute('url', $baseurl.'?stream='.$playlistId.'.mp3'); // fake .mp3
+        $enc->setAttribute('url', $baseurl.'?stream='.$playlistId.'.mp3'.'&token='.urlencode($plex_token)); // fake .mp3
         $enc->setAttribute('type', 'audio/mpeg');
         $item->appendChild($enc);
         $channel->appendChild($item);
@@ -163,7 +166,13 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
             $item->appendChild($dom->createElement('itunes:season', 1));
 
             $enc = $dom->createElement('enclosure');
-            $enc->setAttribute('url', $baseurl.'?proxy='.$t['partId'].'&f='.urlencode($t['fileName']).'&r='.$t['ratingKey']);
+            $enc->setAttribute(
+                'url',
+                $baseurl.'?proxy='.$t['partId'].
+                           '&f='.urlencode($t['fileName']).
+                           '&r='.$t['ratingKey'].
+                           '&token='.urlencode($plex_token)   // <-- added
+            );
             $enc->setAttribute('type', 'audio/mpeg');
             $item->appendChild($enc);
             $channel->appendChild($item);

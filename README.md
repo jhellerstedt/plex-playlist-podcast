@@ -19,10 +19,23 @@ This project publishes every Plex playlist as a podcast RSS feed so you can subs
 - PHP ≥ 7.4 with `simplexml` and `dom` extensions  
 - Playlist names should be ASCII-friendly (spaces are fine)  
 - Only audio playlists are listed; video or mixed playlists are ignored
+- KEEP YOUR TOKEN PRIVATE – anyone with the full URL can stream your music
 
 ## Quick Start
 
-1. Clone the repo  
-2. `cp settings.php.sample settings.php` and fill in your Plex URL + token  
-3. Point your web server to the project root (or run the built-in Docker setup)  
-4. Visit the site – copy any playlist feed URL into your favourite podcast app or the LightPhone dashboard
+1. Clone the repo
+
+2. cp settings.php.sample settings.php – edit only the public URL & Plex address
+
+3. Drop the folder in your web root (or use the built-in Docker image)
+
+4. Visit the site, copy any playlist link, append
+`&token=YOUR_PLEX_TOKEN`
+and paste that full URL into your podcast app.
+
+5Hit subscribe—your personal music now arrives as a never-ending podcast.
+
+## Security Note
+
+The Plex token grants read access to your server.
+Treat feed URLs like passwords—never share them publicly.
