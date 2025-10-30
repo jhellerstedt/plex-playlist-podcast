@@ -122,7 +122,7 @@ function processPlaylist(string $plexKey, bool $randomize, bool $validate): void
     buildRssFeed($tracks, (string)$xml['title'], $plexKey);
 }
 
-/* ---------- RSS builder ---------- */
+/* ---------- RSS builder with corrected total duration calculation ---------- */
 function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId): void
 {
     global $baseurl, $plex_token;
@@ -131,24 +131,40 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
     $rss = $dom->createElement('rss');
     $rss->setAttribute('version', '2.0');
     $rss->setAttribute('xmlns:itunes', 'http://www.itunes.com/dtds/podcast-1.0.dtd');
+
     $channel = $dom->createElement('channel');
     $channel->appendChild($dom->createElement('title', htmlspecialchars($playlistTitle)));
     $channel->appendChild($dom->createElement('itunes:author', 'Plex'));
     $channel->appendChild($dom->createElement('lastBuildDate', date('r')));
 
-    if (PODCAST_MODE === 'concat') {              // single long episode
+    if (PODCAST_MODE === 'concat') {           
+        /* Calculate total duration of all tracks in milliseconds for iTunes */
+        $totalDurationMs = array_sum(array_column($tracks, 'duration'));
+        $totalDurationHMS = gmdate("H:i:s", $totalDurationMs / 1000);
+
         $item = $dom->createElement('item');
         $item->appendChild($dom->createElement('title', htmlspecialchars($playlistTitle)));
         $guid = $dom->createElement('guid', $playlistId);
         $guid->setAttribute('isPermaLink', 'false');
         $item->appendChild($guid);
         $item->appendChild($dom->createElement('pubDate', date('r')));
+
+        /* Add itunes:duration element with total duration */
+        $duration = $dom->createElement('itunes:duration', $totalDurationHMS);
+        $item->appendChild($duration);
+
         $enc = $dom->createElement('enclosure');
-        $enc->setAttribute('url', $baseurl.'?stream='.$playlistId.'.mp3'.'&token='.urlencode($plex_token)); // fake .mp3
+        $enc->setAttribute('url', $baseurl.'?stream='.$playlistId.'.mp3'.'&token='.urlencode($plex_token));
         $enc->setAttribute('type', 'audio/mpeg');
+
+        /* Optionally: Set Content-Length attribute if totalSize is available */
+        if (isset($totalSize)) {
+            $enc->setAttribute('length', $totalSize);
+        }
+
         $item->appendChild($enc);
         $channel->appendChild($item);
-    } else {                                      // classic per-track
+    } else {                                    
         $totalTracks = count($tracks);
         $episode = 1;
         foreach ($tracks as $t) {
@@ -157,21 +173,16 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
             $guid = $dom->createElement('guid', $playlistId.'-'.$episode);
             $guid->setAttribute('isPermaLink', 'false');
             $item->appendChild($guid);
-
-            // Sequential dates (same day for continuous playback)
             $item->appendChild($dom->createElement('pubDate', date('r', strtotime("-{$episode} minutes"))));
-
-            // iTunes episode metadata for series/season
-            $item->appendChild($dom->createElement('itunes:episode', $totalTracks - $episode + 1)); // newest first
+            $item->appendChild($dom->createElement('itunes:episode', $totalTracks - $episode + 1));
             $item->appendChild($dom->createElement('itunes:season', 1));
-
             $enc = $dom->createElement('enclosure');
             $enc->setAttribute(
                 'url',
                 $baseurl.'?proxy='.$t['partId'].
-                           '&f='.urlencode($t['fileName']).
-                           '&r='.$t['ratingKey'].
-                           '&token='.urlencode($plex_token)   // <-- added
+                '&f='.urlencode($t['fileName']).
+                '&r='.$t['ratingKey'].
+                '&token='.urlencode($plex_token)
             );
             $enc->setAttribute('type', 'audio/mpeg');
             $item->appendChild($enc);
@@ -179,10 +190,12 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
             $episode++;
         }
     }
-    $rss->appendChild($channel); $dom->appendChild($rss);
+    $rss->appendChild($channel); 
+    $dom->appendChild($rss);
     header('Content-Type: application/rss+xml; charset=utf-8');
     echo $dom->saveXML();
 }
+
 
 /* ---------- M3U builder (kept for backward compat) ---------- */
 function buildM3u(string $playlistId): string
