@@ -217,14 +217,14 @@ function buildM3u(string $playlistId): string
     return $out;
 }
 
-/* ---------- NEW: continuous MP3 for Apple Podcasts ---------- */
+/* ---------- NEW: continuous MP3 for Apple Podcasts - corrected version ---------- */
 function concatPlaylist(string $playlistId): void
 {
     global $plex_url, $plex_token;
 
     $noVerify = stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]]);
 
-    /* 1. Build track index with byte offsets */
+    /* 1. Build track index with byte offsets - get Content-Length ahead of time */
     $tracks = [];
     $totalSize = 0;
     try {
@@ -232,26 +232,24 @@ function concatPlaylist(string $playlistId): void
         foreach ($xml->Track as $t) {
             $media = $t->Media;
             $part  = $media->Part;
-            $url   = "{$plex_url}/library/parts/{$part['id']}/" .
-                     rawurlencode(basename($part['file'])) .
-                     '?download=1&X-Plex-Token=' . $plex_token;
-            $hdr   = @get_headers($url, true, $noVerify);
-            $trackSize = (int) ($hdr['Content-Length'] ?? 0);
+            $url   = "{$plex_url}/library/parts/{$part['id']}/" . rawurlencode(basename($part['file'])) . '?download=1&X-Plex-Token=' . $plex_token;
+
+            /* Get Content-Length via HEAD request */
+            $hdr = @get_headers($url, true, $noVerify);
+            $trackSize = (int)($hdr['Content-Length'] ?? 0);
 
             $tracks[] = [
-                'ratingKey' => (string)$t['ratingKey'],
-                'duration' => (int)($media['duration'] ?? 0),
-                'startByte' => $totalSize,
-                'endByte' => $totalSize + $trackSize - 1,
-                'size' => $trackSize,
-                'size' => $trackSize,
-                'url' => $url,
+                'ratingKey'  => (string)$t['ratingKey'],
+                'duration'   => (int)($media['duration'] ?? 0),
+                'startByte'  => $totalSize,
+                'endByte'    => $totalSize + $trackSize - 1,
+                'size'       => $trackSize,
+                'url'        => $url, // Store the full URL
             ];
             $totalSize += $trackSize;
         }
     } catch (RuntimeException) {
-        http_response_code(404);
-        exit('Playlist not found');
+        http_response_code(404); exit('Playlist not found');
     }
 
     /* 2. Parse HTTP Range header */
@@ -271,8 +269,9 @@ function concatPlaylist(string $playlistId): void
     header('Content-Length: ' . ($rangeEnd - $rangeStart + 1));
     header('Cache-Control: no-cache');
 
-    /* 4. Stream only requested range and track which tracks were sent */
+    /* 4. Stream only requested range by making fresh HTTP requests for each track segment */
     $currentPos = 0;
+    $sent = 0;
 
     foreach ($tracks as $track) {
         if ($currentPos + $track['size'] <= $rangeStart) {
@@ -286,39 +285,41 @@ function concatPlaylist(string $playlistId): void
             break;
         }
 
-        /* Track is partially or fully in range - stream it */
-        $trackStartInRange = max(0, $rangeStart - $currentPos);
-        $trackEndInRange = min($track['size'] - 1, $rangeEnd - $currentPos);
-        $bytesToSend = $trackEndInRange - $trackStartInRange + 1;
+        /* Determine which part of *this track* we need */
+        $trackOffset = max($rangeStart - $currentPos, 0);
+        $trackEndOffset = min($rangeEnd - $currentPos, $track['size'] - 1);
+        $trackBytes = $trackEndOffset - $trackOffset + 1;
 
-        /* Open track file and seek to start position */
-        $handle = @fopen($track['url'], 'rb', false, $noVerify);
-        if ($handle && $trackStartInRange > 0) {
-            fseek($handle, $trackStartInRange);
-        }
+        // Skip if trackBytes <=0 (no valid range in this track)
+        if($trackBytes > 0) {
+            /* Make a new request to Plex for just this track segment */
+            $rangeCtx = stream_context_create([
+                'http' => [
+                    'method' => 'GET',
+                    'header' => "Range: bytes={$trackOffset}-{$trackEndOffset}\r\n",
+                ],
+                'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
+            ]);
 
-        /* Send only the requested bytes */
-        $sent = 0;
-        $scrobbledThisTrack = false;
-        while ($sent < $bytesToSend && !feof($handle)) {
-            $chunk = @fread($handle, min(8192, $bytesToSend - $sent));
-            if ($chunk === false) break;
-            echo $chunk;
-            $sent += strlen($chunk);
-            if (!$scrobbledThisTrack) {
-                scrobbleOnce($track['ratingKey'], $track['duration']);
-                $scrobbledThisTrack = true;
+            $handle = @fopen($track['url'], 'rb', false, $rangeCtx);
+            if ($handle) {
+                while ($sent < $trackBytes && !feof($handle)) {
+                    $chunk = fread($handle, min(8192, $trackBytes - $sent));
+                    if ($chunk === false) break;
+                    echo $chunk; // Output the chunk
+                    $sent += strlen($chunk);
+                }
+                fclose($handle);
             }
         }
-        fclose($handle);
+
+        /* Check if we've sent enough bytes, break early */
+        if($sent >= ($rangeEnd - $rangeStart + 1)) break;
 
         $currentPos += $track['size'];
-
-        if ($currentPos > $rangeEnd) {
-            break; /* Past requested range */
-        }
     }
 }
+
 
 /* ---------- helper: scrobble a single ratingKey exactly once ---------- */
 function scrobbleOnce(string $ratingKey, int $durationMs): void
