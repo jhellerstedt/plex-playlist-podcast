@@ -237,16 +237,19 @@ function buildM3u(string $playlistId): string
     return $out;
 }
 
+/* ---------- Concatenated Playlist Streamer (With Scrobble Timeout) ---------- */
 function concatPlaylist(string $playlistId): void
 {
     global $plex_url, $plex_token;
     $noVerify = stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]]);
-    $tracks = []; $totalSize = 0;
+    $tracks = []; 
+    $totalSize = 0;
 
-    try {
+    try { 
         $xml = plexGet('/playlists/' . $playlistId . '/items');
         foreach ($xml->Track as $t) {
-            $media = $t->Media; $part = $media->Part;
+            $media = $t->Media; 
+            $part = $media->Part;
             $url = "{$plex_url}/library/parts/{$part['id']}/" . rawurlencode(basename($part['file'])) . '?download=1&X-Plex-Token=' . $plex_token;
             $hdr = @get_headers($url, true, $noVerify);
             $tracks[] = [
@@ -259,11 +262,14 @@ function concatPlaylist(string $playlistId): void
             ];
             $totalSize += (int)($hdr['Content-Length'] ?? 0);
         }
-    } catch (RuntimeException) {
-        http_response_code(404); exit('Playlist not found');
+    } catch (RuntimeException) { 
+        http_response_code(404);
+        exit('Playlist not found');
     }
 
-    $rangeStart = 0; $rangeEnd = $totalSize - 1;
+    $rangeStart = 0; 
+    $rangeEnd = $totalSize - 1;
+
     if (isset($_SERVER['HTTP_RANGE'])) {
         preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $matches);
         $rangeStart = (int)$matches[1];
@@ -277,7 +283,9 @@ function concatPlaylist(string $playlistId): void
     header('Content-Length: ' . ($rangeEnd - $rangeStart + 1));
     header('Cache-Control: no-cache');
 
-    $currentPos = 0; $sent = 0;
+    $currentPos = 0; 
+    $sent = 0;
+    $lastScrobbled = []; 
 
     foreach ($tracks as $track) {
         if ($currentPos + $track['size'] <= $rangeStart) {
@@ -310,14 +318,28 @@ function concatPlaylist(string $playlistId): void
             }
         }
 
-        if ($sent >= $trackBytes) {
-            scrobbleOnce($track['ratingKey'], $track['duration']);
+        if ($sent >= $trackBytes) {  
+            $now = microtime(true);
+            $canScrobble = true;
+
+            if (isset($lastScrobbled[$track['ratingKey']])) {
+                $timeSinceLastScrobble = $now - $lastScrobbled[$track['ratingKey']];
+                if ($timeSinceLastScrobble < 30) { 
+                    $canScrobble = false;
+                }
+            }
+
+            if ($canScrobble) {
+                scrobbleOnce($track['ratingKey'], $track['duration']);
+                $lastScrobbled[$track['ratingKey']] = $now; 
+            }
         }
 
         if ($sent >= ($rangeEnd - $rangeStart + 1)) break;
         $currentPos += $track['size'];
     }
 }
+
 
 
 
