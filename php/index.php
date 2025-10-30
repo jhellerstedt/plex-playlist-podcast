@@ -217,7 +217,7 @@ function buildM3u(string $playlistId): string
     return $out;
 }
 
-/* ---------- NEW: continuous MP3 for Apple Podcasts - corrected version ---------- */
+/* ---------- NEW: continuous MP3 for Apple Podcasts - corrected version (replaces fseek approach) ---------- */
 function concatPlaylist(string $playlistId): void
 {
     global $plex_url, $plex_token;
@@ -304,12 +304,17 @@ function concatPlaylist(string $playlistId): void
             $handle = @fopen($track['url'], 'rb', false, $rangeCtx);
             if ($handle) {
                 while ($sent < $trackBytes && !feof($handle)) {
-                    $chunk = fread($handle, min(8192, $trackBytes - $sent));
+                    $chunkSize = min(8192, $trackBytes - $sent);
+                    $chunk = fread($handle, $chunkSize);
                     if ($chunk === false) break;
                     echo $chunk; // Output the chunk
                     $sent += strlen($chunk);
                 }
                 fclose($handle);
+
+                if($sent >= $trackBytes) {
+                    scrobbleOnce($track['ratingKey'], $track['duration']);
+                }
             }
         }
 
@@ -319,6 +324,7 @@ function concatPlaylist(string $playlistId): void
         $currentPos += $track['size'];
     }
 }
+
 
 
 /* ---------- helper: scrobble a single ratingKey exactly once ---------- */
