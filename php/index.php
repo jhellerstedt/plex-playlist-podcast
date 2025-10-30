@@ -237,7 +237,36 @@ function buildM3u(string $playlistId): string
     return $out;
 }
 
-/* ---------- Concatenated Playlist Streamer (With Scrobble Timeout) ---------- */
+/* ---------- Deferred Scrobble System - Updated ---------- */
+$scrobbleQueue = []; 
+
+function queueScrobble(string $ratingKey, int $duration, int $startTime): void
+{
+    global $scrobbleQueue;
+    $scrobbleQueue[] = ['key' => $ratingKey, 'duration' => $duration, 'start' => $startTime];
+}
+
+function processScrobbleQueue(): void
+{
+    global $scrobbleQueue, $scrobble_config;
+    if (empty($scrobble_config['deferred_enabled'] ?? true)) return;
+
+    $now = time();
+    $scrobbleQueue = array_filter($scrobbleQueue, function($item) use ($now) {
+        $elapsed = $now - $item['start'];
+
+        if ($elapsed >= $item['duration'] && !$item['scrobbled']) {
+            try {
+                scrobbleOnce($item['key'], $item['duration']);
+                $item['scrobbled'] = true; 
+                return false; 
+            } catch (Exception) {  }
+        }
+        return true; 
+    });
+}
+
+/* ---------- Main Playlist Concatenation - Modified ---------- */
 function concatPlaylist(string $playlistId): void
 {
     global $plex_url, $plex_token;
@@ -285,9 +314,10 @@ function concatPlaylist(string $playlistId): void
 
     $currentPos = 0; 
     $sent = 0;
-    $lastScrobbled = []; 
 
-    foreach ($tracks as $track) {
+    foreach ($tracks as $track) { 
+        $start_time = time(); 
+
         if ($currentPos + $track['size'] <= $rangeStart) {
             $currentPos += $track['size'];
             continue;
@@ -307,38 +337,30 @@ function concatPlaylist(string $playlistId): void
 
             $handle = @fopen($track['url'], 'rb', false, $rangeCtx);
             if ($handle) {
-                while ($sent < $trackBytes && !feof($handle)) {
-                    $chunkSize = min(8192, $trackBytes - $sent);
+                $bytes_written = 0;
+                while ($bytes_written < $trackBytes && !feof($handle)) {
+                    $chunkSize = min(8192, $trackBytes - $bytes_written);
                     $chunk = fread($handle, $chunkSize);
-                    if ($chunk === false || $sent >= $trackBytes) break;
+                    if ($chunk === false || $bytes_written >= $trackBytes) break;
                     echo $chunk;
-                    $sent += $chunkSize;
+                    $bytes_written += $chunkSize;
                 }
                 fclose($handle);
             }
         }
 
-        if ($sent >= $trackBytes) {  
-            $now = microtime(true);
-            $canScrobble = true;
-
-            if (isset($lastScrobbled[$track['ratingKey']])) {
-                $timeSinceLastScrobble = $now - $lastScrobbled[$track['ratingKey']];
-                if ($timeSinceLastScrobble < 30) { 
-                    $canScrobble = false;
-                }
-            }
-
-            if ($canScrobble) {
-                scrobbleOnce($track['ratingKey'], $track['duration']);
-                $lastScrobbled[$track['ratingKey']] = $now; 
-            }
+        /* Only queue for full track playback */
+        if ($bytes_written >= $trackBytes) { 
+            queueScrobble($track['ratingKey'], $track['duration'], $start_time);
         }
 
-        if ($sent >= ($rangeEnd - $rangeStart + 1)) break;
+        $sent += $bytes_written;
         $currentPos += $track['size'];
     }
+
+    register_shutdown_function('processScrobbleQueue'); 
 }
+
 
 
 
