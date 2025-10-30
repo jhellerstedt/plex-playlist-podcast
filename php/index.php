@@ -138,9 +138,16 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
     $channel->appendChild($dom->createElement('lastBuildDate', date('r')));
 
     if (PODCAST_MODE === 'concat') {           
-        /* Calculate total duration of all tracks in milliseconds for iTunes */
-        $totalDurationMs = array_sum(array_column($tracks, 'duration'));
-        $totalDurationHMS = gmdate("H:i:s", $totalDurationMs / 1000);
+        // Calculate total duration using integer division to avoid floats
+        $totalDuration = 0;
+        foreach ($tracks as $t) {
+            $totalDuration += $t['duration']; // Use integer values directly
+        }
+        $hours = floor($totalDuration / 3600000);
+        $minutes = floor(($totalDuration % 3600000) / 60000);
+        $seconds = floor(($totalDuration % 60000) / 1000);
+        $totalDurationHMS = sprintf("%02d:%02d:%02d", $hours, $minutes, $seconds);
+        
 
         $item = $dom->createElement('item');
         $item->appendChild($dom->createElement('title', htmlspecialchars($playlistTitle)));
