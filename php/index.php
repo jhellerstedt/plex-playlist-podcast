@@ -217,44 +217,33 @@ function buildM3u(string $playlistId): string
     return $out;
 }
 
-/* ---------- NEW: continuous MP3 for Apple Podcasts - corrected version (replaces fseek approach) ---------- */
 function concatPlaylist(string $playlistId): void
 {
     global $plex_url, $plex_token;
-
     $noVerify = stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]]);
+    $tracks = []; $totalSize = 0;
 
-    /* 1. Build track index with byte offsets - get Content-Length ahead of time */
-    $tracks = [];
-    $totalSize = 0;
     try {
         $xml = plexGet('/playlists/' . $playlistId . '/items');
         foreach ($xml->Track as $t) {
-            $media = $t->Media;
-            $part  = $media->Part;
-            $url   = "{$plex_url}/library/parts/{$part['id']}/" . rawurlencode(basename($part['file'])) . '?download=1&X-Plex-Token=' . $plex_token;
-
-            /* Get Content-Length via HEAD request */
+            $media = $t->Media; $part = $media->Part;
+            $url = "{$plex_url}/library/parts/{$part['id']}/" . rawurlencode(basename($part['file'])) . '?download=1&X-Plex-Token=' . $plex_token;
             $hdr = @get_headers($url, true, $noVerify);
-            $trackSize = (int)($hdr['Content-Length'] ?? 0);
-
             $tracks[] = [
-                'ratingKey'  => (string)$t['ratingKey'],
-                'duration'   => (int)($media['duration'] ?? 0),
-                'startByte'  => $totalSize,
-                'endByte'    => $totalSize + $trackSize - 1,
-                'size'       => $trackSize,
-                'url'        => $url, // Store the full URL
+                'ratingKey' => (string)$t['ratingKey'],
+                'duration' => (int)($media['duration'] ?? 0),
+                'startByte' => $totalSize,
+                'endByte' => $totalSize + (int)($hdr['Content-Length'] ?? 0) - 1,
+                'size' => (int)($hdr['Content-Length'] ?? 0),
+                'url' => $url
             ];
-            $totalSize += $trackSize;
+            $totalSize += (int)($hdr['Content-Length'] ?? 0);
         }
     } catch (RuntimeException) {
         http_response_code(404); exit('Playlist not found');
     }
 
-    /* 2. Parse HTTP Range header */
-    $rangeStart = 0;
-    $rangeEnd = $totalSize - 1;
+    $rangeStart = 0; $rangeEnd = $totalSize - 1;
     if (isset($_SERVER['HTTP_RANGE'])) {
         preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $matches);
         $rangeStart = (int)$matches[1];
@@ -263,41 +252,28 @@ function concatPlaylist(string $playlistId): void
         header("Content-Range: bytes {$rangeStart}-{$rangeEnd}/{$totalSize}");
     }
 
-    /* 3. Send headers */
     header('Content-Type: audio/mpeg');
     header('Accept-Ranges: bytes');
     header('Content-Length: ' . ($rangeEnd - $rangeStart + 1));
     header('Cache-Control: no-cache');
 
-    /* 4. Stream only requested range by making fresh HTTP requests for each track segment */
-    $currentPos = 0;
-    $sent = 0;
+    $currentPos = 0; $sent = 0;
 
     foreach ($tracks as $track) {
         if ($currentPos + $track['size'] <= $rangeStart) {
-            /* Skip this track - it's before requested range */
             $currentPos += $track['size'];
             continue;
         }
 
-        if ($currentPos > $rangeEnd) {
-            /* Stop - we're past requested range */
-            break;
-        }
+        if ($currentPos > $rangeEnd) break;
 
-        /* Determine which part of *this track* we need */
         $trackOffset = max($rangeStart - $currentPos, 0);
         $trackEndOffset = min($rangeEnd - $currentPos, $track['size'] - 1);
         $trackBytes = $trackEndOffset - $trackOffset + 1;
 
-        // Skip if trackBytes <=0 (no valid range in this track)
-        if($trackBytes > 0) {
-            /* Make a new request to Plex for just this track segment */
+        if ($trackBytes > 0) {
             $rangeCtx = stream_context_create([
-                'http' => [
-                    'method' => 'GET',
-                    'header' => "Range: bytes={$trackOffset}-{$trackEndOffset}\r\n",
-                ],
+                'http' => ['method' => 'GET', 'header' => "Range: bytes={$trackOffset}-{$trackEndOffset}\r\n"],
                 'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
             ]);
 
@@ -306,24 +282,23 @@ function concatPlaylist(string $playlistId): void
                 while ($sent < $trackBytes && !feof($handle)) {
                     $chunkSize = min(8192, $trackBytes - $sent);
                     $chunk = fread($handle, $chunkSize);
-                    if ($chunk === false) break;
-                    echo $chunk; // Output the chunk
-                    $sent += strlen($chunk);
+                    if ($chunk === false || $sent >= $trackBytes) break;
+                    echo $chunk;
+                    $sent += $chunkSize;
                 }
                 fclose($handle);
-
-                if($sent >= $trackBytes) {
-                    scrobbleOnce($track['ratingKey'], $track['duration']);
-                }
             }
         }
 
-        /* Check if we've sent enough bytes, break early */
-        if($sent >= ($rangeEnd - $rangeStart + 1)) break;
+        if ($sent >= $trackBytes) {
+            scrobbleOnce($track['ratingKey'], $track['duration']);
+        }
 
+        if ($sent >= ($rangeEnd - $rangeStart + 1)) break;
         $currentPos += $track['size'];
     }
 }
+
 
 
 
