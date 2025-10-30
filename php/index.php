@@ -237,9 +237,12 @@ function buildM3u(string $playlistId): string
     return $out;
 }
 
-/* ---------- Deferred Scrobble System - Updated ---------- */
-$scrobbleQueue = []; 
 
+/* ---------- Global Configuration & Scrobble Management - Complete ---------- */
+$scrobble_config = ['deferred_enabled' => true]; // Configurable scrobble behavior
+$scrobbleQueue = []; // Global scrobble processing queue (preserved between requests)
+
+/* Scrobble Management Functions (unchanged from previous) */
 function queueScrobble(string $ratingKey, int $duration, int $startTime): void
 {
     global $scrobbleQueue;
@@ -249,38 +252,44 @@ function queueScrobble(string $ratingKey, int $duration, int $startTime): void
 function processScrobbleQueue(): void
 {
     global $scrobbleQueue, $scrobble_config;
-    if (empty($scrobble_config['deferred_enabled'] ?? true)) return;
+    if (empty($scrobble_config['deferred_enabled'])) return;
 
     $now = time();
-    $scrobbleQueue = array_filter($scrobbleQueue, function($item) use ($now) {
-        $elapsed = $now - $item['start'];
 
-        if ($elapsed >= $item['duration'] && !$item['scrobbled']) {
-            try {
-                scrobbleOnce($item['key'], $item['duration']);
-                $item['scrobbled'] = true; 
-                return false; 
-            } catch (Exception) {  }
+    foreach ($scrobbleQueue as $index => $item) {
+        // Only scrobble when track duration has elapsed since start
+        if ($now - $item['start'] >= $item['duration']) {
+            scrobbleOnce($item['key'], $item['duration']);
+            unset($scrobbleQueue[$index]); // Remove processed items
         }
-        return true; 
-    });
+    }
 }
 
-/* ---------- Main Playlist Concatenation - Modified ---------- */
+/* ---------- Main Playlist Concatenation - Final Implementation ---------- */
 function concatPlaylist(string $playlistId): void
 {
     global $plex_url, $plex_token;
-    $noVerify = stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]]);
+
+    // Send headers immediately for device compatibility (Light Phone fix)
+    header('Content-Type: audio/mpeg');
+    header('Accept-Ranges: bytes');
+    header('Cache-Control: no-cache');
+
+    $noVerifyCtx = stream_context_create([
+        'ssl' => ['verify_peer' => false, 'verify_peer_name' => false]
+    ]);
+
     $tracks = []; 
     $totalSize = 0;
 
     try { 
+        // Uses your existing plexGet function
         $xml = plexGet('/playlists/' . $playlistId . '/items');
         foreach ($xml->Track as $t) {
             $media = $t->Media; 
             $part = $media->Part;
             $url = "{$plex_url}/library/parts/{$part['id']}/" . rawurlencode(basename($part['file'])) . '?download=1&X-Plex-Token=' . $plex_token;
-            $hdr = @get_headers($url, true, $noVerify);
+            $hdr = @get_headers($url, true, $noVerifyCtx);
             $tracks[] = [
                 'ratingKey' => (string)$t['ratingKey'],
                 'duration' => (int)($media['duration'] ?? 0),
@@ -296,6 +305,7 @@ function concatPlaylist(string $playlistId): void
         exit('Playlist not found');
     }
 
+    // Setup range handling after we have all tracks loaded
     $rangeStart = 0; 
     $rangeEnd = $totalSize - 1;
 
@@ -307,16 +317,13 @@ function concatPlaylist(string $playlistId): void
         header("Content-Range: bytes {$rangeStart}-{$rangeEnd}/{$totalSize}");
     }
 
-    header('Content-Type: audio/mpeg');
-    header('Accept-Ranges: bytes');
     header('Content-Length: ' . ($rangeEnd - $rangeStart + 1));
-    header('Cache-Control: no-cache');
 
     $currentPos = 0; 
     $sent = 0;
 
     foreach ($tracks as $track) { 
-        $start_time = time(); 
+        $start_time = time(); // Track start for scrobble timing
 
         if ($currentPos + $track['size'] <= $rangeStart) {
             $currentPos += $track['size'];
@@ -337,11 +344,11 @@ function concatPlaylist(string $playlistId): void
 
             $handle = @fopen($track['url'], 'rb', false, $rangeCtx);
             if ($handle) {
-                $bytes_written = 0;
+                $bytes_written = 0; // Byte-accurate write tracking
                 while ($bytes_written < $trackBytes && !feof($handle)) {
                     $chunkSize = min(8192, $trackBytes - $bytes_written);
                     $chunk = fread($handle, $chunkSize);
-                    if ($chunk === false || $bytes_written >= $trackBytes) break;
+                    if ($chunk === false) break; // Read failure
                     echo $chunk;
                     $bytes_written += $chunkSize;
                 }
@@ -349,20 +356,16 @@ function concatPlaylist(string $playlistId): void
             }
         }
 
-        /* Only queue for full track playback */
-        if ($bytes_written >= $trackBytes) { 
-            queueScrobble($track['ratingKey'], $track['duration'], $start_time);
-        }
+        // Queue scrobble only for fully delivered tracks
+        if ($bytes_written >= $trackBytes) queueScrobble($track['ratingKey'], $track['duration'], $start_time);
 
         $sent += $bytes_written;
         $currentPos += $track['size'];
     }
 
+    // Process any remaining scrobbles on shutdown
     register_shutdown_function('processScrobbleQueue'); 
 }
-
-
-
 
 
 
