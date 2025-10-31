@@ -262,17 +262,20 @@ function processScrobbleQueue(): void
     global $scrobbleQueue, $scrobble_config;
     if (empty($scrobble_config['deferred_enabled'])) return;
 
-    $now = time();
+    $now = time(); // Current time in SECONDS
 
-    foreach ($scrobbleQueue as $idx => $item) {
-        $durationSec = (int) ceil($item['durationMs'] / 1000);
-        if ($now - $item['startSec'] >= $durationSec) {
-            // Pass position if your Plex API supports it; otherwise ignore
-            scrobbleOnce($item['key'], $durationSec, $item['positionMs'] ?? 0);
-            unset($scrobbleQueue[$idx]);
+    foreach ($scrobbleQueue as $index => $item) {
+        // CRITICAL FIX: Convert Plex duration (ms) to seconds for comparison
+        $durationSec = (int) ceil($item['duration'] / 1000);
+
+        // Now comparing SECONDS to SECONDS
+        if ($now - $item['start'] >= $durationSec) {
+            scrobbleOnce($item['key'], $item['duration']);
+            unset($scrobbleQueue[$index]);
         }
     }
 }
+
 
 
 
@@ -375,7 +378,12 @@ function concatPlaylist(string $playlistId): void
 
         // Queue scrobble for fully delivered tracks
         if ($bytes_written >= $trackBytes) {
-            queueScrobble($track['ratingKey'], (int)($track['duration'] ?? 0), $startTimeSec, $offsetMs);
+            queueScrobble(
+                $track['ratingKey'],
+                (int)$track['duration'],  // Still in milliseconds (Plex format)
+                time(),                   // Current time in seconds (PHP format)
+                $offsetMs                 // Position within stream (ms)
+            );
         }
 
         $offsetMs += (int)($track['duration'] ?? 0);
