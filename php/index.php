@@ -392,7 +392,7 @@ function concatPlaylist(string $playlistId): void
 
 
 /* ---------- helper: scrobble a single ratingKey exactly once ---------- */
-function scrobbleOnce(string $ratingKey, int $durationMs): void
+function scrobbleOnce(string $ratingKey, int $durationMs, int $positionMs = 0): void
 {
     static $done = [];                       // memory-of-fire
     if (isset($done[$ratingKey])) return;   // already scrobbled this request
@@ -414,13 +414,20 @@ function scrobbleOnce(string $ratingKey, int $durationMs): void
         'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
     ]);
 
+    // Convert to seconds for Plex timeline
+    $timeSec = (int) max(0, floor($durationMs / 1000));
+    $posSec  = (int) max(0, floor($positionMs / 1000));
+
+    // Try with position support (best-effort)
     $url = "{$plex_url}/:/timeline?ratingKey={$ratingKey}&key={$ratingKey}"
-         . "&state=stopped&time={$durationMs}&duration={$durationMs}"
-         . "&X-Plex-Token={$plex_token}";
+         . "&state=stopped&time={$timeSec}&duration={$timeSec}"
+         . "&X-Plex-Token={$plex_token}"
+         . ($positionMs > 0 ? "&position={$posSec}" : "");
 
     @file_get_contents($url, false, $ctx);
-    error_log('[concat-scrobble] track=' . $ratingKey);
+    error_log('[concat-scrobble] track=' . $ratingKey . " time=${timeSec}s pos=${posSec}s");
 }
+
 
 /* ---------- proxy + scrobble ---------- */
 function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, string $ratingKey = ''): void
