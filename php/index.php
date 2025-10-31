@@ -256,14 +256,16 @@ function processScrobbleQueue(): void
 
     $now = time();
 
-    foreach ($scrobbleQueue as $index => $item) {
-        // Only scrobble when track duration has elapsed since start
-        if ($now - $item['start'] >= $item['duration']) {
-            scrobbleOnce($item['key'], $item['duration']);
-            unset($scrobbleQueue[$index]); // Remove processed items
+    foreach ($scrobbleQueue as $idx => $item) {
+        $durationSec = (int) ceil($item['durationMs'] / 1000);
+        if ($now - $item['startSec'] >= $durationSec) {
+            // If your API accepts position, pass it
+            scrobbleOnce($item['key'], $durationSec, $item['positionMs'] ?? 0);
+            unset($scrobbleQueue[$idx]);
         }
     }
 }
+
 
 
 function concatPlaylist(string $playlistId): void
