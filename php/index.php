@@ -265,7 +265,7 @@ function processScrobbleQueue(): void
     }
 }
 
-/* ---------- Main Playlist Concatenation - Final Implementation ---------- */
+
 function concatPlaylist(string $playlistId): void
 {
     global $plex_url, $plex_token;
@@ -283,22 +283,23 @@ function concatPlaylist(string $playlistId): void
     $totalSize = 0;
 
     try { 
-        // Uses your existing plexGet function
         $xml = plexGet('/playlists/' . $playlistId . '/items');
         foreach ($xml->Track as $t) {
             $media = $t->Media; 
             $part = $media->Part;
-            $url = "{$plex_url}/library/parts/{$part['id']}/" . rawurlencode(basename($part['file'])) . '?download=1&X-Plex-Token=' . $plex_token;
+            $url = "{$plex_url}/library/parts/{$part['id']}/" .
+                   rawurlencode(basename((string)$part['file'])) .
+                   '?download=1&X-Plex-Token=' . $plex_token;
             $hdr = @get_headers($url, true, $noVerifyCtx);
+            $size = (int)($hdr['Content-Length'] ?? 0);
+
             $tracks[] = [
                 'ratingKey' => (string)$t['ratingKey'],
-                'duration' => (int)($media['duration'] ?? 0),
-                'startByte' => $totalSize,
-                'endByte' => $totalSize + (int)($hdr['Content-Length'] ?? 0) - 1,
-                'size' => (int)($hdr['Content-Length'] ?? 0),
-                'url' => $url
+                'duration'  => (int)($media['duration'] ?? 0), // ms
+                'size'      => $size,
+                'url'       => $url
             ];
-            $totalSize += (int)($hdr['Content-Length'] ?? 0);
+            $totalSize += $size;
         }
     } catch (RuntimeException) { 
         http_response_code(404);
@@ -320,20 +321,26 @@ function concatPlaylist(string $playlistId): void
     header('Content-Length: ' . ($rangeEnd - $rangeStart + 1));
 
     $currentPos = 0; 
-    $sent = 0;
+    $bytesSent = 0;
+
+    $startTimeSec = time(); // start time for scrobbling
+    $offsetMs = 0;          // cumulative duration in ms
 
     foreach ($tracks as $track) { 
-        $start_time = time(); // Track start for scrobble timing
+        $trackBytes = 0;
+        $bytes_written = 0;
 
-        if ($currentPos + $track['size'] <= $rangeStart) {
-            $currentPos += $track['size'];
+        $trackSize = $track['size'];
+        if ($currentPos + $trackSize <= $rangeStart) {
+            $currentPos += $trackSize;
+            $offsetMs += (int)($track['duration'] ?? 0);
             continue;
         }
 
         if ($currentPos > $rangeEnd) break;
 
         $trackOffset = max($rangeStart - $currentPos, 0);
-        $trackEndOffset = min($rangeEnd - $currentPos, $track['size'] - 1);
+        $trackEndOffset = min($rangeEnd - $currentPos, $trackSize - 1);
         $trackBytes = $trackEndOffset - $trackOffset + 1;
 
         if ($trackBytes > 0) {
@@ -344,28 +351,34 @@ function concatPlaylist(string $playlistId): void
 
             $handle = @fopen($track['url'], 'rb', false, $rangeCtx);
             if ($handle) {
-                $bytes_written = 0; // Byte-accurate write tracking
                 while ($bytes_written < $trackBytes && !feof($handle)) {
                     $chunkSize = min(8192, $trackBytes - $bytes_written);
                     $chunk = fread($handle, $chunkSize);
                     if ($chunk === false) break; // Read failure
                     echo $chunk;
                     $bytes_written += $chunkSize;
+                    @flush();
+                    @ob_flush();
                 }
                 fclose($handle);
             }
         }
 
-        // Queue scrobble only for fully delivered tracks
-        if ($bytes_written >= $trackBytes) queueScrobble($track['ratingKey'], $track['duration'], $start_time);
+        // Queue scrobble for fully delivered tracks
+        if ($bytes_written >= $trackBytes) {
+            // durationMs, startSec, positionMs
+            queueScrobble($track['ratingKey'], (int)($track['duration'] ?? 0), $startTimeSec, $offsetMs);
+        }
 
-        $sent += $bytes_written;
+        $offsetMs += (int)($track['duration'] ?? 0);
+        $bytesSent += $bytes_written;
         $currentPos += $track['size'];
     }
 
-    // Process any remaining scrobbles on shutdown
-    register_shutdown_function('processScrobbleQueue'); 
+    // Process the scrobble queue immediately after streaming
+    processScrobbleQueue();
 }
+
 
 
 
