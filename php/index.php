@@ -244,6 +244,7 @@ $scrobbleQueue = []; // Global scrobble processing queue (preserved between requ
 
 /* Scrobble Management Functions (unchanged from previous) */
 // New signature: include duration in ms, start time in seconds, and position offset
+// Queue a scrobble with detailed timing information
 function queueScrobble(string $ratingKey, int $durationMs, int $startSec, int $positionMs): void
 {
     global $scrobbleQueue;
@@ -255,7 +256,7 @@ function queueScrobble(string $ratingKey, int $durationMs, int $startSec, int $p
     ];
 }
 
-
+// Process the scrobble queue immediately after streaming finishes
 function processScrobbleQueue(): void
 {
     global $scrobbleQueue, $scrobble_config;
@@ -266,12 +267,13 @@ function processScrobbleQueue(): void
     foreach ($scrobbleQueue as $idx => $item) {
         $durationSec = (int) ceil($item['durationMs'] / 1000);
         if ($now - $item['startSec'] >= $durationSec) {
-            // If your API accepts position, pass it
+            // Pass position if your Plex API supports it; otherwise ignore
             scrobbleOnce($item['key'], $durationSec, $item['positionMs'] ?? 0);
             unset($scrobbleQueue[$idx]);
         }
     }
 }
+
 
 
 
@@ -291,11 +293,11 @@ function concatPlaylist(string $playlistId): void
     $tracks = []; 
     $totalSize = 0;
 
-    try { 
+    try {
         $xml = plexGet('/playlists/' . $playlistId . '/items');
         foreach ($xml->Track as $t) {
-            $media = $t->Media; 
-            $part = $media->Part;
+            $media = $t->Media;
+            $part  = $media->Part;
             $url = "{$plex_url}/library/parts/{$part['id']}/" .
                    rawurlencode(basename((string)$part['file'])) .
                    '?download=1&X-Plex-Token=' . $plex_token;
@@ -315,10 +317,9 @@ function concatPlaylist(string $playlistId): void
         exit('Playlist not found');
     }
 
-    // Setup range handling after we have all tracks loaded
+    // Setup range handling
     $rangeStart = 0; 
     $rangeEnd = $totalSize - 1;
-
     if (isset($_SERVER['HTTP_RANGE'])) {
         preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $matches);
         $rangeStart = (int)$matches[1];
@@ -336,7 +337,6 @@ function concatPlaylist(string $playlistId): void
     $offsetMs = 0;          // cumulative duration in ms
 
     foreach ($tracks as $track) { 
-        $trackBytes = 0;
         $bytes_written = 0;
 
         $trackSize = $track['size'];
@@ -363,7 +363,7 @@ function concatPlaylist(string $playlistId): void
                 while ($bytes_written < $trackBytes && !feof($handle)) {
                     $chunkSize = min(8192, $trackBytes - $bytes_written);
                     $chunk = fread($handle, $chunkSize);
-                    if ($chunk === false) break; // Read failure
+                    if ($chunk === false) break;
                     echo $chunk;
                     $bytes_written += $chunkSize;
                     @flush();
@@ -375,7 +375,6 @@ function concatPlaylist(string $playlistId): void
 
         // Queue scrobble for fully delivered tracks
         if ($bytes_written >= $trackBytes) {
-            // durationMs, startSec, positionMs
             queueScrobble($track['ratingKey'], (int)($track['duration'] ?? 0), $startTimeSec, $offsetMs);
         }
 
@@ -384,18 +383,19 @@ function concatPlaylist(string $playlistId): void
         $currentPos += $track['size'];
     }
 
-    // Process the scrobble queue immediately after streaming
+    // Process scrobbles immediately after streaming
     processScrobbleQueue();
 }
 
 
 
 
+
 /* ---------- helper: scrobble a single ratingKey exactly once ---------- */
-function scrobbleOnce(string $ratingKey, int $durationMs, int $positionMs = 0): void
+function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0): void
 {
-    static $done = [];                       // memory-of-fire
-    if (isset($done[$ratingKey])) return;   // already scrobbled this request
+    static $done = [];
+    if (isset($done[$ratingKey])) return;
     $done[$ratingKey] = true;
 
     global $plex_url, $plex_token;
@@ -414,19 +414,17 @@ function scrobbleOnce(string $ratingKey, int $durationMs, int $positionMs = 0): 
         'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
     ]);
 
-    // Convert to seconds for Plex timeline
-    $timeSec = (int) max(0, floor($durationMs / 1000));
-    $posSec  = (int) max(0, floor($positionMs / 1000));
-
-    // Try with position support (best-effort)
+    $posSec = (int) floor($positionMs / 1000);
+    // Plex timeline - use seconds for time/duration
     $url = "{$plex_url}/:/timeline?ratingKey={$ratingKey}&key={$ratingKey}"
-         . "&state=stopped&time={$timeSec}&duration={$timeSec}"
+         . "&state=stopped&time={$durationSec}&duration={$durationSec}"
          . "&X-Plex-Token={$plex_token}"
          . ($positionMs > 0 ? "&position={$posSec}" : "");
 
     @file_get_contents($url, false, $ctx);
-    error_log('[concat-scrobble] track=' . $ratingKey . " time=${timeSec}s pos=${posSec}s");
+    error_log('[concat-scrobble] track=' . $ratingKey);
 }
+
 
 
 /* ---------- proxy + scrobble ---------- */
