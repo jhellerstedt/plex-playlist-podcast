@@ -243,11 +243,18 @@ $scrobble_config = ['deferred_enabled' => true]; // Configurable scrobble behavi
 $scrobbleQueue = []; // Global scrobble processing queue (preserved between requests)
 
 /* Scrobble Management Functions (unchanged from previous) */
-function queueScrobble(string $ratingKey, int $duration, int $startTime): void
+// New signature: include duration in ms, start time in seconds, and position offset
+function queueScrobble(string $ratingKey, int $durationMs, int $startSec, int $positionMs): void
 {
     global $scrobbleQueue;
-    $scrobbleQueue[] = ['key' => $ratingKey, 'duration' => $duration, 'start' => $startTime];
+    $scrobbleQueue[] = [
+        'key' => $ratingKey,
+        'durationMs' => $durationMs,
+        'startSec' => $startSec,
+        'positionMs' => $positionMs
+    ];
 }
+
 
 function processScrobbleQueue(): void
 {
