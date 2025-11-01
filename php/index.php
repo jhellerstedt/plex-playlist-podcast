@@ -260,11 +260,13 @@ function queueScrobble(string $ratingKey, int $durationMs, int $startSec, int $p
 function processScrobbleQueue(): void
 {
     global $scrobbleQueue, $scrobble_config;
+    error_log('[process-scrobble-queue] deferred_enabled=' . ($scrobble_config['deferred_enabled'] ? 'true' : 'false') . ' queue_count=' . count($scrobbleQueue));
     if (empty($scrobble_config['deferred_enabled'])) return;
 
     foreach ($scrobbleQueue as $index => $item) {
         // Convert Plex duration (ms) to seconds for API
         $durationSec = (int) ceil($item['durationMs'] / 1000);
+        error_log('[process-scrobble-queue] processing key=' . $item['key'] . ' durationSec=' . $durationSec);
         
         // Scrobble immediately - we don't wait for actual playback time
         scrobbleOnce($item['key'], $durationSec, $item['positionMs']);
@@ -373,6 +375,7 @@ function concatPlaylist(string $playlistId): void
 
         // Queue scrobble for fully delivered tracks
         if ($bytes_written >= $trackBytes) {
+            error_log('[queue-scrobble] ratingKey=' . $track['ratingKey'] . ' durationMs=' . $track['duration']);
             queueScrobble(
                 $track['ratingKey'],
                 (int)$track['duration'],  // Still in milliseconds (Plex format)
