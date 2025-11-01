@@ -241,6 +241,7 @@ function buildM3u(string $playlistId): string
 /* ---------- Global Configuration & Scrobble Management - Complete ---------- */
 $scrobble_config = ['deferred_enabled' => true]; // Configurable scrobble behavior
 $scrobbleQueue = []; // Global scrobble processing queue (preserved between requests)
+error_log('[global-init] deferred_enabled=' . ($scrobble_config['deferred_enabled'] ? 'true' : 'false'));
 
 /* Scrobble Management Functions (unchanged from previous) */
 // New signature: include duration in ms, start time in seconds, and position offset
@@ -280,7 +281,8 @@ function processScrobbleQueue(): void
 
 function concatPlaylist(string $playlistId): void
 {
-    global $plex_url, $plex_token;
+    global $plex_url, $plex_token, $scrobble_config;
+    error_log('[concatPlaylist-start] deferred_enabled=' . ($scrobble_config['deferred_enabled'] ? 'true' : 'false'));
 
     // Send headers immediately for device compatibility (Light Phone fix)
     header('Content-Type: audio/mpeg');
