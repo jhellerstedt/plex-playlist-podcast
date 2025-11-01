@@ -410,6 +410,19 @@ function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0):
         return;
     }
     
+    // Check if already scrobbled by reading file content first (with expiry)
+    @rewind($lockHandle);
+    $lockContent = @stream_get_contents($lockHandle);
+    if ($lockContent !== false && $lockContent !== '') {
+        $scrobbleTime = (int)trim($lockContent);
+        // Expire after 3 minutes to allow re-scrobbling same track later
+        if ($scrobbleTime > 0 && (time() - $scrobbleTime) < 180) {
+            fclose($lockHandle);
+            error_log('[concat-scrobble] SKIP already-scrobbled track=' . $ratingKey);
+            return;
+        }
+    }
+    
     if (!@flock($lockHandle, LOCK_EX | LOCK_NB)) {
         // Another process is scrobbling this track concurrently
         fclose($lockHandle);
@@ -448,6 +461,11 @@ function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0):
         $httpCode = $matches[1] ?? 0;
     }
     error_log('[concat-scrobble] track=' . $ratingKey . ' http=' . $httpCode . ' response=' . substr($resp, 0, 50));
+    
+    // Write completion marker to prevent duplicate scrobbles across requests
+    @rewind($lockHandle);
+    @ftruncate($lockHandle, 0);
+    @fwrite($lockHandle, time() . "\n");
     
     flock($lockHandle, LOCK_UN);
     fclose($lockHandle);
