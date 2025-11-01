@@ -411,28 +411,12 @@ function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0):
     }
     
     if (!@flock($lockHandle, LOCK_EX | LOCK_NB)) {
-        // Another process is scrobbling this track
+        // Another process is scrobbling this track concurrently
         fclose($lockHandle);
+        error_log('[concat-scrobble] SKIP concurrent duplicate track=' . $ratingKey);
         return;
     }
     
-    // Check if already scrobbled by reading lock file
-    @rewind($lockHandle);
-    $lockContent = @stream_get_contents($lockHandle);
-    if ($lockContent !== false && $lockContent !== '') {
-        // Already scrobbled in a previous request
-        flock($lockHandle, LOCK_UN);
-        fclose($lockHandle);
-        error_log('[concat-scrobble] SKIP already-scrobbled track=' . $ratingKey);
-        return;
-    }
-    
-    // Double-check after acquiring lock
-    if (isset($done[$ratingKey])) {
-        flock($lockHandle, LOCK_UN);
-        fclose($lockHandle);
-        return;
-    }
     $done[$ratingKey] = true;
 
     $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
@@ -464,11 +448,6 @@ function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0):
         $httpCode = $matches[1] ?? 0;
     }
     error_log('[concat-scrobble] track=' . $ratingKey . ' http=' . $httpCode . ' response=' . substr($resp, 0, 50));
-    
-    // Write completion marker to prevent duplicate scrobbles across requests
-    @rewind($lockHandle);
-    @ftruncate($lockHandle, 0);
-    @fwrite($lockHandle, time() . "\n");
     
     flock($lockHandle, LOCK_UN);
     fclose($lockHandle);
