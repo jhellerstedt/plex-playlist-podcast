@@ -457,8 +457,13 @@ function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0):
          . "&X-Plex-Token={$plex_token}"
          . ($positionMs > 0 ? "&position={$posSec}" : "");
 
-    @file_get_contents($url, false, $ctx);
-    error_log('[concat-scrobble] track=' . $ratingKey);
+    $resp = @file_get_contents($url, false, $ctx);
+    $httpCode = 0;
+    if (isset($http_response_header) && is_array($http_response_header)) {
+        preg_match('/HTTP\/[\d.]+\s+(\d+)/', $http_response_header[0], $matches);
+        $httpCode = $matches[1] ?? 0;
+    }
+    error_log('[concat-scrobble] track=' . $ratingKey . ' http=' . $httpCode . ' response=' . substr($resp, 0, 50));
     
     // Write completion marker to prevent duplicate scrobbles across requests
     @rewind($lockHandle);
