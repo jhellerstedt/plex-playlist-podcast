@@ -399,9 +399,31 @@ function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0):
 {
     static $done = [];
     if (isset($done[$ratingKey])) return;
+    
+    global $plex_url, $plex_token;
+    
+    // Use file lock to prevent duplicate scrobbles across parallel requests
+    $lockFile = sys_get_temp_dir() . '/plexpod_scrobble_' . md5($plex_url . $plex_token . $ratingKey) . '.lock';
+    $lockHandle = @fopen($lockFile, 'c+');
+    if (!$lockHandle) {
+        error_log('[concat-scrobble] FAILED to open lock file: ' . $lockFile);
+        return;
+    }
+    
+    if (!@flock($lockHandle, LOCK_EX | LOCK_NB)) {
+        // Another process is scrobbling this track
+        fclose($lockHandle);
+        return;
+    }
+    
+    // Double-check after acquiring lock
+    if (isset($done[$ratingKey])) {
+        flock($lockHandle, LOCK_UN);
+        fclose($lockHandle);
+        return;
+    }
     $done[$ratingKey] = true;
 
-    global $plex_url, $plex_token;
     $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
 
     $ctx = stream_context_create([
@@ -426,6 +448,9 @@ function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0):
 
     @file_get_contents($url, false, $ctx);
     error_log('[concat-scrobble] track=' . $ratingKey);
+    
+    flock($lockHandle, LOCK_UN);
+    fclose($lockHandle);
 }
 
 
