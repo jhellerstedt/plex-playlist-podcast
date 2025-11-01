@@ -8,6 +8,11 @@ define('PODCAST_MODE', 'concat');   // 'concat' = single long episode
 /*  ----------  common helper: read token once  ----------  */
 $plex_token = $_GET['token'] ?? '';
 
+/* ---------- Global Configuration & Scrobble Management ---------- */
+$scrobble_config = ['deferred_enabled' => true];
+$scrobbleQueue = [];
+error_log('[global-init] deferred_enabled=' . ($scrobble_config['deferred_enabled'] ? 'true' : 'false'));
+
 /*  ----------  ROUTING  ----------  */
 if (isset($_GET['stream'])) {                     // 1️⃣  continuous MP3
     $id = strtok($_GET['stream'], '.');           // strip fake ".mp3"
@@ -238,12 +243,7 @@ function buildM3u(string $playlistId): string
 }
 
 
-/* ---------- Global Configuration & Scrobble Management - Complete ---------- */
-$scrobble_config = ['deferred_enabled' => true]; // Configurable scrobble behavior
-$scrobbleQueue = []; // Global scrobble processing queue (preserved between requests)
-error_log('[global-init] deferred_enabled=' . ($scrobble_config['deferred_enabled'] ? 'true' : 'false'));
-
-/* Scrobble Management Functions (unchanged from previous) */
+/* ---------- Scrobble Management Functions ---------- */
 // New signature: include duration in ms, start time in seconds, and position offset
 // Queue a scrobble with detailed timing information
 function queueScrobble(string $ratingKey, int $durationMs, int $startSec, int $positionMs): void
