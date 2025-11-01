@@ -248,6 +248,15 @@ function buildM3u(string $playlistId): string
 function queueScrobble(string $ratingKey, int $durationMs, int $startSec, int $positionMs): void
 {
     global $scrobbleQueue;
+    
+    // Check if this track is already in the queue
+    foreach ($scrobbleQueue as $existing) {
+        if ($existing['key'] === $ratingKey) {
+            // Already queued, don't add duplicate
+            return;
+        }
+    }
+    
     $scrobbleQueue[] = [
         'key' => $ratingKey,
         'durationMs' => $durationMs,
@@ -256,18 +265,20 @@ function queueScrobble(string $ratingKey, int $durationMs, int $startSec, int $p
     ];
 }
 
-// Process the scrobble queue immediately after streaming finishes
+// Process the scrobble queue with timing logic
 function processScrobbleQueue(): void
 {
     global $scrobbleQueue, $scrobble_config;
     if (empty($scrobble_config['deferred_enabled'])) return;
 
+    $now = time();
+    
     foreach ($scrobbleQueue as $index => $item) {
         // Convert Plex duration (ms) to seconds for API
         $durationSec = (int) ceil($item['durationMs'] / 1000);
         
-        // Scrobble immediately - we don't wait for actual playback time
-        scrobbleOnce($item['key'], $durationSec, $item['positionMs']);
+        // Always scrobble immediately - let the lock file prevent duplicates
+        scrobbleOnce($item['key'], $durationSec, $item['positionMs'], $item['startSec']);
         unset($scrobbleQueue[$index]);
     }
 }
@@ -371,8 +382,8 @@ function concatPlaylist(string $playlistId): void
             }
         }
 
-        // Queue scrobble for fully delivered tracks
-        if ($bytes_written >= $trackBytes) {
+        // Queue scrobble for any partially delivered tracks (scrobble on first byte)
+        if ($bytes_written > 0) {
             queueScrobble(
                 $track['ratingKey'],
                 (int)$track['duration'],  // Still in milliseconds (Plex format)
@@ -395,7 +406,7 @@ function concatPlaylist(string $playlistId): void
 
 
 /* ---------- helper: scrobble a single ratingKey exactly once ---------- */
-function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0): void
+function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0, int $startSec = 0): void
 {
     static $done = [];
     if (isset($done[$ratingKey])) return;
@@ -410,24 +421,24 @@ function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0):
         return;
     }
     
-    // Check if already scrobbled by reading file content first (with expiry)
+    if (!@flock($lockHandle, LOCK_EX | LOCK_NB)) {
+        // Another process is scrobbling this track concurrently
+        fclose($lockHandle);
+        return;
+    }
+    
+    // Check if already scrobbled (with expiry)
     @rewind($lockHandle);
     $lockContent = @stream_get_contents($lockHandle);
     if ($lockContent !== false && $lockContent !== '') {
         $scrobbleTime = (int)trim($lockContent);
         // Expire after 3 minutes to allow re-scrobbling same track later
         if ($scrobbleTime > 0 && (time() - $scrobbleTime) < 180) {
+            flock($lockHandle, LOCK_UN);
             fclose($lockHandle);
             error_log('[concat-scrobble] SKIP already-scrobbled track=' . $ratingKey);
             return;
         }
-    }
-    
-    if (!@flock($lockHandle, LOCK_EX | LOCK_NB)) {
-        // Another process is scrobbling this track concurrently
-        fclose($lockHandle);
-        error_log('[concat-scrobble] SKIP concurrent duplicate track=' . $ratingKey);
-        return;
     }
     
     $done[$ratingKey] = true;
@@ -462,7 +473,7 @@ function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0):
     }
     error_log('[concat-scrobble] track=' . $ratingKey . ' http=' . $httpCode . ' response=' . substr($resp, 0, 50));
     
-    // Write completion marker to prevent duplicate scrobbles across requests
+    // Write scrobbled marker to prevent duplicate scrobbles
     @rewind($lockHandle);
     @ftruncate($lockHandle, 0);
     @fwrite($lockHandle, time() . "\n");
