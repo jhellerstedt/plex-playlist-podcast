@@ -262,17 +262,13 @@ function processScrobbleQueue(): void
     global $scrobbleQueue, $scrobble_config;
     if (empty($scrobble_config['deferred_enabled'])) return;
 
-    $now = time(); // Current time in SECONDS
-
     foreach ($scrobbleQueue as $index => $item) {
-        // CRITICAL FIX: Convert Plex duration (ms) to seconds for comparison
-        $durationSec = (int) ceil($item['duration'] / 1000);
-
-        // Now comparing SECONDS to SECONDS
-        if ($now - $item['start'] >= $durationSec) {
-            scrobbleOnce($item['key'], $item['duration']);
-            unset($scrobbleQueue[$index]);
-        }
+        // Convert Plex duration (ms) to seconds for API
+        $durationSec = (int) ceil($item['durationMs'] / 1000);
+        
+        // Scrobble immediately - we don't wait for actual playback time
+        scrobbleOnce($item['key'], $durationSec, $item['positionMs']);
+        unset($scrobbleQueue[$index]);
     }
 }
 
@@ -324,19 +320,18 @@ function concatPlaylist(string $playlistId): void
     $rangeStart = 0; 
     $rangeEnd = $totalSize - 1;
     if (isset($_SERVER['HTTP_RANGE'])) {
-        preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $matches);
-        $rangeStart = (int)$matches[1];
-        $rangeEnd = $matches[2] !== '' ? (int)$matches[2] : $totalSize - 1;
-        http_response_code(206);
-        header("Content-Range: bytes {$rangeStart}-{$rangeEnd}/{$totalSize}");
+        if (preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $matches)) {
+            $rangeStart = (int)$matches[1];
+            $rangeEnd = $matches[2] !== '' ? (int)$matches[2] : $totalSize - 1;
+            http_response_code(206);
+            header("Content-Range: bytes {$rangeStart}-{$rangeEnd}/{$totalSize}");
+        }
     }
 
     header('Content-Length: ' . ($rangeEnd - $rangeStart + 1));
 
     $currentPos = 0; 
     $bytesSent = 0;
-
-    $startTimeSec = time(); // start time for scrobbling
     $offsetMs = 0;          // cumulative duration in ms
 
     foreach ($tracks as $track) { 
