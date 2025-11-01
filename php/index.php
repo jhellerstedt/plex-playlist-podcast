@@ -416,6 +416,17 @@ function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0):
         return;
     }
     
+    // Check if already scrobbled by reading lock file
+    @rewind($lockHandle);
+    $lockContent = @stream_get_contents($lockHandle);
+    if ($lockContent !== false && $lockContent !== '') {
+        // Already scrobbled in a previous request
+        flock($lockHandle, LOCK_UN);
+        fclose($lockHandle);
+        error_log('[concat-scrobble] SKIP already-scrobbled track=' . $ratingKey);
+        return;
+    }
+    
     // Double-check after acquiring lock
     if (isset($done[$ratingKey])) {
         flock($lockHandle, LOCK_UN);
@@ -448,6 +459,11 @@ function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0):
 
     @file_get_contents($url, false, $ctx);
     error_log('[concat-scrobble] track=' . $ratingKey);
+    
+    // Write completion marker to prevent duplicate scrobbles across requests
+    @rewind($lockHandle);
+    @ftruncate($lockHandle, 0);
+    @fwrite($lockHandle, time() . "\n");
     
     flock($lockHandle, LOCK_UN);
     fclose($lockHandle);
