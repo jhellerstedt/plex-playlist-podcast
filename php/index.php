@@ -515,8 +515,12 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
         'ssl'  => ['verify_peer' => false, 'verify_peer_name' => false],
     ]);
     $trackUrl = "{$plex_url}/library/metadata/{$scrobbleKey}?X-Plex-Token={$plex_token}";
-    $trackXml = @simplexml_load_string(@file_get_contents($trackUrl, false, $trackCtx));
+    $trackXmlStr = @file_get_contents($trackUrl, false, $trackCtx);
+    $trackXml = @simplexml_load_string($trackXmlStr);
     $duration = $trackXml ? (int)($trackXml->Media[0]['duration'] ?? 0) : 0;
+    if ($duration === 0) {
+        error_log('[proxy-timeline] WARNING duration=0 for track='.$scrobbleKey.' xml='.substr($trackXmlStr, 0, 100));
+    }
 
     // Send timeline updates to mark as played (must send playing then stopped)
     $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
