@@ -527,10 +527,6 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     } else {
         $duration = 0;
     }
-    if ($duration === 0) {
-        error_log('[proxy-timeline] WARNING duration=0 for track='.$scrobbleKey.' xml='.substr($trackXmlStr, 0, 100));
-    }
-
     // Send timeline updates to mark as played (must send playing then stopped)
     $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
     $timelineCtx = stream_context_create([
@@ -552,14 +548,8 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
                   . "&state=stopped&time={$duration}&duration={$duration}"
                   . "&X-Plex-Token={$plex_token}";
-    $resp = @file_get_contents($timelineUrl, false, $timelineCtx);
-    if ($resp === false) {
-        error_log('[proxy-timeline] FAIL track='.$scrobbleKey);
-    } else {
-        $httpCode = isset($http_response_header) ? 
-            (preg_match('/HTTP\/[\d.]+\s+(\d+)/', $http_response_header[0], $matches) ? $matches[1] : 'unknown') : 'no headers';
-        error_log('[proxy-timeline] track='.$scrobbleKey.' duration='.$duration.' response='.substr($resp, 0, 100).' httpCode='.$httpCode);
-    }
+    @file_get_contents($timelineUrl, false, $timelineCtx);
+    error_log('[proxy-timeline] track='.$scrobbleKey);
 
     /* ---------- 3. stream the track ---------- */
     $url = "{$plex_url}/library/parts/{$partId}/".rawurlencode($fileName)."?download=1&X-Plex-Token={$plex_token}";
