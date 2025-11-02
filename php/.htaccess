@@ -1,0 +1,13 @@
+# Disable PHP execution timeout for streaming
+php_value max_execution_time 0
+php_value max_input_time 0
+
+# Disable output buffering for streaming
+php_value output_buffering Off
+
+# Set reasonable memory limit for streaming
+php_value memory_limit 256M
+
+# Disable Apache compression for streaming
+SetEnvIf Request_URI "\.(mp3|m3u)" no-gzip dont-vary
+
