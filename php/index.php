@@ -6,7 +6,7 @@
 if (ob_get_level()) ob_end_clean();
 
 include 'settings.php';          // defines: $baseurl, $plex_url  (NO TOKEN)
-define('PODCAST_MODE', 'proxy');   // 'concat' = single long episode, 'proxy' = per-track episodes
+define('PODCAST_MODE', 'concat');   // 'concat' = single long episode, 'proxy' = per-track episodes
 
 /*  ----------  common helper: read token once  ----------  */
 $plex_token = $_GET['token'] ?? '';
