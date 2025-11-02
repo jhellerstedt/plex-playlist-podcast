@@ -429,7 +429,7 @@ function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0, 
     
     // Check if already scrobbled (with expiry)
     @rewind($lockHandle);
-    $lockContent = @stream_get_contents($lockHandle);
+    $lockContent = @fread($lockHandle, 64); // Read first 64 bytes (more than enough for a timestamp)
     if ($lockContent !== false && $lockContent !== '') {
         $scrobbleTime = (int)trim($lockContent);
         // Expire after 3 minutes to allow re-scrobbling same track later
