@@ -3,7 +3,7 @@ php_value max_execution_time 0
 php_value max_input_time 0
 
 # Disable output buffering for streaming
-php_value output_buffering Off
+php_value output_buffering 0
 
 # Set reasonable memory limit for streaming
 php_value memory_limit 256M
