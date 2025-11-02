@@ -548,8 +548,12 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
                   . "&state=stopped&time={$duration}&duration={$duration}"
                   . "&X-Plex-Token={$plex_token}";
-    @file_get_contents($timelineUrl, false, $timelineCtx);
-    error_log('[proxy-timeline] track='.$scrobbleKey);
+    $resp = @file_get_contents($timelineUrl, false, $timelineCtx);
+    if ($resp === false) {
+        error_log('[proxy-timeline] FAIL track='.$scrobbleKey);
+    } else {
+        error_log('[proxy-timeline] track='.$scrobbleKey.' response='.substr($resp, 0, 100));
+    }
 
     /* ---------- 3. stream the track ---------- */
     $url = "{$plex_url}/library/parts/{$partId}/".rawurlencode($fileName)."?download=1&X-Plex-Token={$plex_token}";
