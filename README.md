@@ -7,8 +7,8 @@ This project publishes every Plex playlist as a podcast RSS feed so you can subs
 
 - **All Plex audio playlists** are exposed as separate podcast feeds  
 - **Ordered or shuffled playback** – each feed can be fetched in original order or randomized every time the feed is refreshed  
-- **“Concat” mode** – delivers the entire playlist as **one long MP3 file**; LP3 podcast tool won't play autoplay episodes from a single podcast AFAIK 
-- **Per-track proxy** – classic mode still serves every song as its own episode; both modes transparently proxy and **scrobble** the play-back to Plex once the first byte of a track is streamed  
+- **Per-track episodes** – each song is served as its own episode  
+- **Scrobbling** – tracks are automatically marked as played in Plex when streamed  
 - **Validation page** – quickly see which tracks in a playlist are missing from disk  
 - **Immediate updates** – any change you make to a Plex playlist is reflected the next time the podcast feed is refreshed
 
