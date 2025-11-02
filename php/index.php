@@ -535,13 +535,13 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
         ],
     ]);
 
-    // First, mark as playing
+    // First, mark as playing at position 0
     $timelineUrlPlay = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
                       . "&state=playing&time=0&duration={$duration}"
                       . "&X-Plex-Token={$plex_token}";
-    @file_get_contents($timelineUrlPlay, false, $timelineCtx);
+    $respPlay = @file_get_contents($timelineUrlPlay, false, $timelineCtx);
     
-    // Then, mark as stopped to record the play
+    // Then, mark as stopped at end of track to record the play
     $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
                   . "&state=stopped&time={$duration}&duration={$duration}"
                   . "&X-Plex-Token={$plex_token}";
@@ -551,7 +551,7 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     } else {
         $httpCode = isset($http_response_header) ? 
             (preg_match('/HTTP\/[\d.]+\s+(\d+)/', $http_response_header[0], $matches) ? $matches[1] : 'unknown') : 'no headers';
-        error_log('[proxy-timeline] track='.$scrobbleKey.' response='.substr($resp, 0, 100).' httpCode='.$httpCode);
+        error_log('[proxy-timeline] track='.$scrobbleKey.' duration='.$duration.' play='.substr($respPlay, 0, 50).' stop='.substr($resp, 0, 100).' httpCode='.$httpCode);
     }
 
     /* ---------- 3. stream the track ---------- */
