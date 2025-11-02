@@ -516,12 +516,11 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     ]);
     $trackUrl = "{$plex_url}/library/metadata/{$scrobbleKey}?X-Plex-Token={$plex_token}";
     $trackXml = @simplexml_load_string(@file_get_contents($trackUrl, false, $trackCtx));
-    $durationMs = $trackXml ? (int)($trackXml->Media[0]['duration'] ?? 0) : 0;
-    $durationSec = (int) ceil($durationMs / 1000); // Convert to seconds for Plex API
+    $duration = $trackXml ? (int)($trackXml->Media[0]['duration'] ?? 0) : 0;
 
     // Send timeline update to mark as played
     $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
-                  . "&state=stopped&time={$durationSec}&duration={$durationSec}"
+                  . "&state=stopped&time={$duration}&duration={$duration}"
                   . "&X-Plex-Token={$plex_token}";
 
     $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
