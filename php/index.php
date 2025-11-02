@@ -365,11 +365,16 @@ function concatPlaylist(string $playlistId): void
         $trackBytes = $trackEndOffset - $trackOffset + 1;
 
         if ($trackBytes > 0) {
-            $handle = @fopen($track['url'], 'rb', false, $noVerifyCtx);
-            if ($handle) {
-                if ($trackOffset > 0) {
-                    fseek($handle, $trackOffset);
-                }
+            // Use HTTP Range for remote Plex files (fseek doesn't work on HTTP streams)
+            $rangeCtx = stream_context_create([
+                'http' => ['method' => 'GET', 'header' => "Range: bytes={$trackOffset}-{$trackEndOffset}\r\n"],
+                'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
+            ]);
+            
+            $handle = @fopen($track['url'], 'rb', false, $rangeCtx);
+            if (!$handle) {
+                error_log('[concat-stream] FAILED to open track URL offset=' . $trackOffset . ' bytes=' . $trackBytes);
+            } else {
                 while ($bytes_written < $trackBytes && !feof($handle)) {
                     $chunkSize = min(8192, $trackBytes - $bytes_written);
                     $chunk = fread($handle, $chunkSize);
