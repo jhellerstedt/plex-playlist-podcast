@@ -553,6 +553,7 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
                       . "&state=playing&time=0&duration={$duration}"
                       . "&X-Plex-Token={$plex_token}";
     $respPlay = @file_get_contents($timelineUrlPlay, false, $timelineCtx);
+    usleep(500000); // Wait 500ms between state changes
     
     // Then, mark as stopped at end of track to record the play
     $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
