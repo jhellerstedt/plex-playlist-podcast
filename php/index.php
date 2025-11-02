@@ -518,11 +518,7 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     $trackXml = @simplexml_load_string(@file_get_contents($trackUrl, false, $trackCtx));
     $duration = $trackXml ? (int)($trackXml->Media[0]['duration'] ?? 0) : 0;
 
-    // Send timeline update to mark as played
-    $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
-                  . "&state=stopped&time={$duration}&duration={$duration}"
-                  . "&X-Plex-Token={$plex_token}";
-
+    // Send timeline updates to mark as played (must send playing then stopped)
     $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
     $timelineCtx = stream_context_create([
         'http' => [
@@ -539,6 +535,16 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
         ],
     ]);
 
+    // First, mark as playing
+    $timelineUrlPlay = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
+                      . "&state=playing&time=0&duration={$duration}"
+                      . "&X-Plex-Token={$plex_token}";
+    @file_get_contents($timelineUrlPlay, false, $timelineCtx);
+    
+    // Then, mark as stopped to record the play
+    $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
+                  . "&state=stopped&time={$duration}&duration={$duration}"
+                  . "&X-Plex-Token={$plex_token}";
     $resp = @file_get_contents($timelineUrl, false, $timelineCtx);
     if ($resp === false) {
         error_log('[proxy-timeline] FAIL track='.$scrobbleKey);
