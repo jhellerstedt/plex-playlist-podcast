@@ -2,6 +2,9 @@
 /*------------------------------------------------------------------------------
  *  Plex → Podcast RSS  (token-per-URL edition)
  *----------------------------------------------------------------------------*/
+// Disable output buffering for streaming
+if (ob_get_level()) ob_end_clean();
+
 include 'settings.php';          // defines: $baseurl, $plex_url  (NO TOKEN)
 define('PODCAST_MODE', 'concat');   // 'concat' = single long episode
 
