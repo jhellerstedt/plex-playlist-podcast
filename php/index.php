@@ -173,7 +173,7 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     $fileName = trim(urldecode($fileName));
     if ($fileName === '') { http_response_code(400); exit('Bad request'); }
 
-    /* ---------- 2. mark as played BEFORE streaming (use Timeline API) ---------- */
+    /* ---------- 2. get track metadata and prepare for scrobbling ---------- */
     $scrobbleKey = ($ratingKey && ctype_digit($ratingKey)) ? $ratingKey : $partId;
 
     // Get track duration by fetching metadata
@@ -191,11 +191,11 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
         } else {
             $durationMs = (int)($trackXml->Media['duration'] ?? 0);
         }
-        $durationSec = (int) ceil($durationMs / 1000); // Convert to seconds for Plex API
     } else {
-        $durationSec = 0;
+        $durationMs = 0;
     }
-    // Send timeline updates to mark as played (must send playing then stopped)
+    
+    // Prepare timeline context for use after streaming
     $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
     $timelineCtx = stream_context_create([
         'http' => [
@@ -212,16 +212,25 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
         ],
     ]);
 
-    // Send timeline update to mark as played
-    $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
-                  . "&state=stopped&time={$durationSec}&duration={$durationSec}"
-                  . "&X-Plex-Token={$plex_token}";
-    $resp = @file_get_contents($timelineUrl, false, $timelineCtx);
-    if ($resp === false) {
-        error_log('[proxy-timeline] FAIL track='.$scrobbleKey);
-    } else {
-        error_log('[proxy-timeline] track='.$scrobbleKey.' response='.substr($resp, 0, 100));
-    }
+    // Register timeline updates to run after streaming completes
+    register_shutdown_function(function() use ($plex_url, $scrobbleKey, $durationMs, $plex_token, $timelineCtx) {
+        // Send timeline updates: first playing, then stopped to properly mark as played
+        $timelineUrlPlaying = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
+                             . "&state=playing&time=0&duration={$durationMs}"
+                             . "&X-Plex-Token={$plex_token}";
+        $respPlaying = @file_get_contents($timelineUrlPlaying, false, $timelineCtx);
+        
+        $timelineUrlStopped = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
+                             . "&state=stopped&time={$durationMs}&duration={$durationMs}"
+                             . "&X-Plex-Token={$plex_token}";
+        $respStopped = @file_get_contents($timelineUrlStopped, false, $timelineCtx);
+        
+        if ($respPlaying === false || $respStopped === false) {
+            error_log('[proxy-timeline] FAIL track='.$scrobbleKey.' playing='.($respPlaying ? 'OK' : 'FAIL').' stopped='.($respStopped ? 'OK' : 'FAIL'));
+        } else {
+            error_log('[proxy-timeline] SUCCESS track='.$scrobbleKey.' playing_len='.strlen($respPlaying).' stopped_len='.strlen($respStopped));
+        }
+    });
 
     /* ---------- 3. stream the track ---------- */
     $url = "{$plex_url}/library/parts/{$partId}/".rawurlencode($fileName)."?download=1&X-Plex-Token={$plex_token}";
@@ -239,7 +248,7 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     fclose($fh);
 
 
-    /* ---------- 3. all done ---------- */
+    /* ---------- 4. all done ---------- */
     exit;
 }
 
