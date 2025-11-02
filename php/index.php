@@ -386,6 +386,8 @@ function concatPlaylist(string $playlistId): void
                     if ($chunk === false) break;
                     echo $chunk;
                     $bytes_written += strlen($chunk); // Use actual bytes read, not requested
+                    @flush();
+                    @ob_flush();
                 }
                 fclose($handle);
             }
