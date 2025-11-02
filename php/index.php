@@ -6,26 +6,12 @@
 if (ob_get_level()) ob_end_clean();
 
 include 'settings.php';          // defines: $baseurl, $plex_url  (NO TOKEN)
-define('PODCAST_MODE', 'concat');   // 'concat' = single long episode, 'proxy' = per-track episodes
 
 /*  ----------  common helper: read token once  ----------  */
 $plex_token = $_GET['token'] ?? '';
 
-/* ---------- Global Configuration & Scrobble Management ---------- */
-$scrobble_config = ['deferred_enabled' => true];
-$scrobbleQueue = [];
 
 /*  ----------  ROUTING  ----------  */
-if (isset($_GET['stream'])) {                     // 1️⃣  continuous MP3
-    $id = strtok($_GET['stream'], '.');           // strip fake ".mp3"
-    concatPlaylist($id, $plex_token);
-    exit;
-}
-if (isset($_GET['m3u'])) {                        // 2️⃣  segmented M3U
-    header('Content-Type: audio/x-mpegurl');
-    echo buildM3u($_GET['m3u'], $plex_token);
-    exit;
-}
 if (isset($_GET['plexKey'])) {
     $key       = urldecode($_GET['plexKey']);
     $randomize = urldecode($_GET['randomize']) === 'true';
@@ -144,355 +130,36 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
     $channel->appendChild($dom->createElement('itunes:author', 'Plex'));
     $channel->appendChild($dom->createElement('lastBuildDate', date('r')));
 
-    if (PODCAST_MODE === 'concat') {           
-        // Calculate total duration using integer division to avoid floats
-        $totalDuration = 0;
-        foreach ($tracks as $t) {
-            $totalDuration += $t['duration']; // Use integer values directly
-        }
-        $hours = floor($totalDuration / 3600000);
-        $minutes = floor(($totalDuration % 3600000) / 60000);
-        $seconds = floor(($totalDuration % 60000) / 1000);
-        $totalDurationHMS = sprintf("%02d:%02d:%02d", $hours, $minutes, $seconds);
-        
-
+    // Proxy mode: each track is a separate episode
+    $totalTracks = count($tracks);
+    $episode = 1;
+    foreach ($tracks as $t) {
         $item = $dom->createElement('item');
-        $item->appendChild($dom->createElement('title', htmlspecialchars($playlistTitle)));
-        $guid = $dom->createElement('guid', $playlistId);
+        $item->appendChild($dom->createElement('title', htmlspecialchars($t['title'])));
+        $guid = $dom->createElement('guid', $playlistId.'-'.$episode);
         $guid->setAttribute('isPermaLink', 'false');
         $item->appendChild($guid);
-        $item->appendChild($dom->createElement('pubDate', date('r')));
-
-        /* Add itunes:duration element with total duration */
-        $duration = $dom->createElement('itunes:duration', $totalDurationHMS);
-        $item->appendChild($duration);
-
+        $item->appendChild($dom->createElement('pubDate', date('r', strtotime("-{$episode} minutes"))));
+        $item->appendChild($dom->createElement('itunes:episode', $totalTracks - $episode + 1));
+        $item->appendChild($dom->createElement('itunes:season', 1));
         $enc = $dom->createElement('enclosure');
-        $enc->setAttribute('url', $baseurl.'?stream='.$playlistId.'.mp3'.'&token='.urlencode($plex_token));
+        $enc->setAttribute(
+            'url',
+            $baseurl.'?proxy='.$t['partId'].
+            '&f='.urlencode($t['fileName']).
+            '&r='.$t['ratingKey'].
+            '&token='.urlencode($plex_token)
+        );
         $enc->setAttribute('type', 'audio/mpeg');
-
-        /* Optionally: Set Content-Length attribute if totalSize is available */
-        if (isset($totalSize)) {
-            $enc->setAttribute('length', $totalSize);
-        }
-
         $item->appendChild($enc);
         $channel->appendChild($item);
-    } else {                                    
-        $totalTracks = count($tracks);
-        $episode = 1;
-        foreach ($tracks as $t) {
-            $item = $dom->createElement('item');
-            $item->appendChild($dom->createElement('title', htmlspecialchars($t['title'])));
-            $guid = $dom->createElement('guid', $playlistId.'-'.$episode);
-            $guid->setAttribute('isPermaLink', 'false');
-            $item->appendChild($guid);
-            $item->appendChild($dom->createElement('pubDate', date('r', strtotime("-{$episode} minutes"))));
-            $item->appendChild($dom->createElement('itunes:episode', $totalTracks - $episode + 1));
-            $item->appendChild($dom->createElement('itunes:season', 1));
-            $enc = $dom->createElement('enclosure');
-            $enc->setAttribute(
-                'url',
-                $baseurl.'?proxy='.$t['partId'].
-                '&f='.urlencode($t['fileName']).
-                '&r='.$t['ratingKey'].
-                '&token='.urlencode($plex_token)
-            );
-            $enc->setAttribute('type', 'audio/mpeg');
-            $item->appendChild($enc);
-            $channel->appendChild($item);
-            $episode++;
-        }
+        $episode++;
     }
     $rss->appendChild($channel); 
     $dom->appendChild($rss);
     header('Content-Type: application/rss+xml; charset=utf-8');
     echo $dom->saveXML();
 }
-
-
-/* ---------- M3U builder (kept for backward compat) ---------- */
-function buildM3u(string $playlistId): string
-{
-    global $baseurl;
-    $tracks = []; $offsetMs = 0;
-    try {
-        $xml = plexGet('/playlists/'.$playlistId.'/items');
-        foreach ($xml->Track as $t) {
-            $media = $t->Media; $part = $media->Part;
-            $dur   = (int)($media['duration'] ?? 0);
-            $tracks[] = [
-                'title'     => (string)($t['grandparentTitle'].' - '.$t['title']),
-                'ratingKey' => (int)$t['ratingKey'],
-                'partId'    => (int)$part['id'],
-                'fileName'  => basename((string)$part['file']),
-                'duration'  => $dur,
-                'offset'    => $offsetMs,
-            ];
-            $offsetMs += $dur;
-        }
-    } catch (RuntimeException) { return "#EXTM3U"; }
-
-    $out = "#EXTM3U\n";
-    foreach ($tracks as $t) {
-        $url = $baseurl.'?proxy='.$t['partId']
-                       .'&f='.urlencode($t['fileName'])
-                       .'&ts='.$t['offset']
-                       .'&r='.$t['ratingKey'];
-        $out.= "#EXTINF:".($t['duration']/1000).",".$t['title']."\n".$url."\n";
-    }
-    return $out;
-}
-
-
-/* ---------- Scrobble Management Functions ---------- */
-// New signature: include duration in ms, start time in seconds, and position offset
-// Queue a scrobble with detailed timing information
-function queueScrobble(string $ratingKey, int $durationMs, int $startSec, int $positionMs): void
-{
-    global $scrobbleQueue;
-    
-    // Check if this track is already in the queue
-    foreach ($scrobbleQueue as $existing) {
-        if ($existing['key'] === $ratingKey) {
-            // Already queued, don't add duplicate
-            return;
-        }
-    }
-    
-    $scrobbleQueue[] = [
-        'key' => $ratingKey,
-        'durationMs' => $durationMs,
-        'startSec' => $startSec,
-        'positionMs' => $positionMs
-    ];
-}
-
-// Process the scrobble queue with timing logic
-function processScrobbleQueue(): void
-{
-    global $scrobbleQueue, $scrobble_config;
-    if (empty($scrobble_config['deferred_enabled'])) return;
-
-    $now = time();
-    
-    foreach ($scrobbleQueue as $index => $item) {
-        // Convert Plex duration (ms) to seconds for API
-        $durationSec = (int) ceil($item['durationMs'] / 1000);
-        
-        // Always scrobble immediately - let the lock file prevent duplicates
-        scrobbleOnce($item['key'], $durationSec, $item['positionMs'], $item['startSec']);
-        unset($scrobbleQueue[$index]);
-    }
-}
-
-
-
-
-
-function concatPlaylist(string $playlistId): void
-{
-    global $plex_url, $plex_token;
-
-    // Send headers immediately for device compatibility (Light Phone fix)
-    header('Content-Type: audio/mpeg');
-    header('Accept-Ranges: bytes');
-    header('Cache-Control: no-cache');
-
-    $noVerifyCtx = stream_context_create([
-        'ssl' => ['verify_peer' => false, 'verify_peer_name' => false]
-    ]);
-
-    $tracks = []; 
-    $totalSize = 0;
-
-    try {
-        $xml = plexGet('/playlists/' . $playlistId . '/items');
-        foreach ($xml->Track as $t) {
-            $media = $t->Media;
-            $part  = $media->Part;
-            $url = "{$plex_url}/library/parts/{$part['id']}/" .
-                   rawurlencode(basename((string)$part['file'])) .
-                   '?download=1&X-Plex-Token=' . $plex_token;
-            $hdr = @get_headers($url, true, $noVerifyCtx);
-            $size = (int)($hdr['Content-Length'] ?? 0);
-
-            $tracks[] = [
-                'ratingKey' => (string)$t['ratingKey'],
-                'duration'  => (int)($media['duration'] ?? 0), // ms
-                'size'      => $size,
-                'url'       => $url
-            ];
-            $totalSize += $size;
-        }
-    } catch (RuntimeException) { 
-        http_response_code(404);
-        exit('Playlist not found');
-    }
-
-    // Setup range handling
-    $rangeStart = 0; 
-    $rangeEnd = $totalSize - 1;
-    if (isset($_SERVER['HTTP_RANGE'])) {
-        if (preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $matches)) {
-            $rangeStart = (int)$matches[1];
-            $rangeEnd = $matches[2] !== '' ? (int)$matches[2] : $totalSize - 1;
-            http_response_code(206);
-            header("Content-Range: bytes {$rangeStart}-{$rangeEnd}/{$totalSize}");
-        }
-    }
-
-    header('Content-Length: ' . ($rangeEnd - $rangeStart + 1));
-
-    $currentPos = 0; 
-    $bytesSent = 0;
-    $offsetMs = 0;          // cumulative duration in ms
-
-    foreach ($tracks as $track) { 
-        $bytes_written = 0;
-
-        $trackSize = $track['size'];
-        if ($currentPos + $trackSize <= $rangeStart) {
-            $currentPos += $trackSize;
-            $offsetMs += (int)($track['duration'] ?? 0);
-            continue;
-        }
-
-        if ($currentPos > $rangeEnd) break;
-
-        $trackOffset = max($rangeStart - $currentPos, 0);
-        $trackEndOffset = min($rangeEnd - $currentPos, $trackSize - 1);
-        $trackBytes = $trackEndOffset - $trackOffset + 1;
-
-        if ($trackBytes > 0) {
-            // Use HTTP Range for remote Plex files (fseek doesn't work on HTTP streams)
-            $rangeCtx = stream_context_create([
-                'http' => [
-                    'method' => 'GET',
-                    'header' => "Range: bytes={$trackOffset}-{$trackEndOffset}\r\n",
-                    'timeout' => 300, // 5 minute timeout for large range requests
-                ],
-                'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
-            ]);
-            
-            $handle = @fopen($track['url'], 'rb', false, $rangeCtx);
-            if (!$handle) {
-                error_log('[concat-stream] FAILED to open track URL offset=' . $trackOffset . ' bytes=' . $trackBytes);
-            } else {
-                // Stream data directly without chunking overhead
-                while ($bytes_written < $trackBytes && !feof($handle)) {
-                    $chunkSize = min(8192, $trackBytes - $bytes_written);
-                    $chunk = fread($handle, $chunkSize);
-                    if ($chunk === false) break;
-                    echo $chunk;
-                    $bytes_written += strlen($chunk); // Use actual bytes read, not requested
-                    @flush();
-                    @ob_flush();
-                }
-                fclose($handle);
-            }
-        }
-
-        // Queue scrobble for any partially delivered tracks (scrobble on first byte)
-        if ($bytes_written > 0) {
-            queueScrobble(
-                $track['ratingKey'],
-                (int)$track['duration'],  // Still in milliseconds (Plex format)
-                time(),                   // Current time in seconds (PHP format)
-                $offsetMs                 // Position within stream (ms)
-            );
-        }
-
-        $offsetMs += (int)($track['duration'] ?? 0);
-        $bytesSent += $bytes_written;
-        $currentPos += $track['size'];
-    }
-
-    // Process scrobbles immediately after streaming
-    processScrobbleQueue();
-}
-
-
-
-
-
-/* ---------- helper: scrobble a single ratingKey exactly once ---------- */
-function scrobbleOnce(string $ratingKey, int $durationSec, int $positionMs = 0, int $startSec = 0): void
-{
-    static $done = [];
-    if (isset($done[$ratingKey])) return;
-    
-    global $plex_url, $plex_token;
-    
-    // Use file lock to prevent duplicate scrobbles across parallel requests
-    $lockFile = sys_get_temp_dir() . '/plexpod_scrobble_' . md5($plex_url . $plex_token . $ratingKey) . '.lock';
-    $lockHandle = @fopen($lockFile, 'c+');
-    if (!$lockHandle) {
-        error_log('[concat-scrobble] FAILED to open lock file: ' . $lockFile);
-        return;
-    }
-    
-    if (!@flock($lockHandle, LOCK_EX | LOCK_NB)) {
-        // Another process is scrobbling this track concurrently
-        fclose($lockHandle);
-        return;
-    }
-    
-    // Check if already scrobbled (with expiry)
-    @rewind($lockHandle);
-    $lockContent = @fread($lockHandle, 64); // Read first 64 bytes (more than enough for a timestamp)
-    if ($lockContent !== false && $lockContent !== '') {
-        $scrobbleTime = (int)trim($lockContent);
-        // Expire after 3 minutes to allow re-scrobbling same track later
-        if ($scrobbleTime > 0 && (time() - $scrobbleTime) < 180) {
-            flock($lockHandle, LOCK_UN);
-            fclose($lockHandle);
-            error_log('[concat-scrobble] SKIP already-scrobbled track=' . $ratingKey);
-            return;
-        }
-    }
-    
-    $done[$ratingKey] = true;
-
-    $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
-
-    $ctx = stream_context_create([
-        'http' => [
-            'method'  => 'POST',
-            'header'  => "Content-Length: 0\r\n"
-                       . "User-Agent: PlexPlaylistPodcast/1.0\r\n"
-                       . "Accept: */*\r\n"
-                       . "X-Plex-Client-Identifier: {$clientId}\r\n",
-            'ignore_errors' => true,
-            'timeout' => 2,
-        ],
-        'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
-    ]);
-
-    $posSec = (int) floor($positionMs / 1000);
-    // Plex timeline - use seconds for time/duration
-    $url = "{$plex_url}/:/timeline?ratingKey={$ratingKey}&key={$ratingKey}"
-         . "&state=stopped&time={$durationSec}&duration={$durationSec}"
-         . "&X-Plex-Token={$plex_token}"
-         . ($positionMs > 0 ? "&position={$posSec}" : "");
-
-    $resp = @file_get_contents($url, false, $ctx);
-    $httpCode = 0;
-    if (isset($http_response_header) && is_array($http_response_header)) {
-        preg_match('/HTTP\/[\d.]+\s+(\d+)/', $http_response_header[0], $matches);
-        $httpCode = $matches[1] ?? 0;
-    }
-    error_log('[concat-scrobble] track=' . $ratingKey . ' http=' . $httpCode . ' response=' . substr($resp, 0, 50));
-    
-    // Write scrobbled marker to prevent duplicate scrobbles
-    @rewind($lockHandle);
-    @ftruncate($lockHandle, 0);
-    @fwrite($lockHandle, time() . "\n");
-    
-    flock($lockHandle, LOCK_UN);
-    fclose($lockHandle);
-}
-
 
 
 /* ---------- proxy + scrobble ---------- */
