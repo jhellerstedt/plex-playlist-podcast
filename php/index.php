@@ -520,12 +520,13 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     if ($trackXml) {
         // Try to get duration from Track->Media->duration
         if (isset($trackXml->Track)) {
-            $duration = (int)($trackXml->Track->Media['duration'] ?? 0);
+            $durationMs = (int)($trackXml->Track->Media['duration'] ?? 0);
         } else {
-            $duration = (int)($trackXml->Media['duration'] ?? 0);
+            $durationMs = (int)($trackXml->Media['duration'] ?? 0);
         }
+        $durationSec = (int) ceil($durationMs / 1000); // Convert to seconds for Plex API
     } else {
-        $duration = 0;
+        $durationSec = 0;
     }
     // Send timeline updates to mark as played (must send playing then stopped)
     $clientId = 'plex-playlist-podcast-' . md5($plex_url . $plex_token);
@@ -546,7 +547,7 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
 
     // Send timeline update to mark as played
     $timelineUrl = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
-                  . "&state=stopped&time={$duration}&duration={$duration}"
+                  . "&state=stopped&time={$durationSec}&duration={$durationSec}"
                   . "&X-Plex-Token={$plex_token}";
     $resp = @file_get_contents($timelineUrl, false, $timelineCtx);
     if ($resp === false) {
