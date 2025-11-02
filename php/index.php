@@ -367,7 +367,11 @@ function concatPlaylist(string $playlistId): void
         if ($trackBytes > 0) {
             // Use HTTP Range for remote Plex files (fseek doesn't work on HTTP streams)
             $rangeCtx = stream_context_create([
-                'http' => ['method' => 'GET', 'header' => "Range: bytes={$trackOffset}-{$trackEndOffset}\r\n"],
+                'http' => [
+                    'method' => 'GET',
+                    'header' => "Range: bytes={$trackOffset}-{$trackEndOffset}\r\n",
+                    'timeout' => 300, // 5 minute timeout for large range requests
+                ],
                 'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
             ]);
             
