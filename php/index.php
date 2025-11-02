@@ -271,9 +271,6 @@ function queueScrobble(string $ratingKey, int $durationMs, int $startSec, int $p
 // Process the scrobble queue with timing logic
 function processScrobbleQueue(): void
 {
-    // TEMPORARILY DISABLED FOR TESTING - NO SCROBBLING
-    return;
-    
     global $scrobbleQueue, $scrobble_config;
     if (empty($scrobble_config['deferred_enabled'])) return;
 
