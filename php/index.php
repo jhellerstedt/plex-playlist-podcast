@@ -517,7 +517,16 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
     $trackUrl = "{$plex_url}/library/metadata/{$scrobbleKey}?X-Plex-Token={$plex_token}";
     $trackXmlStr = @file_get_contents($trackUrl, false, $trackCtx);
     $trackXml = @simplexml_load_string($trackXmlStr);
-    $duration = $trackXml ? (int)($trackXml->Media[0]['duration'] ?? 0) : 0;
+    if ($trackXml) {
+        // Try to get duration from Track->Media->duration
+        if (isset($trackXml->Track)) {
+            $duration = (int)($trackXml->Track->Media['duration'] ?? 0);
+        } else {
+            $duration = (int)($trackXml->Media['duration'] ?? 0);
+        }
+    } else {
+        $duration = 0;
+    }
     if ($duration === 0) {
         error_log('[proxy-timeline] WARNING duration=0 for track='.$scrobbleKey.' xml='.substr($trackXmlStr, 0, 100));
     }
