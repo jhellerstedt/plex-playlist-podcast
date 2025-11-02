@@ -365,13 +365,11 @@ function concatPlaylist(string $playlistId): void
         $trackBytes = $trackEndOffset - $trackOffset + 1;
 
         if ($trackBytes > 0) {
-            $rangeCtx = stream_context_create([
-                'http' => ['method' => 'GET', 'header' => "Range: bytes={$trackOffset}-{$trackEndOffset}\r\n"],
-                'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
-            ]);
-
-            $handle = @fopen($track['url'], 'rb', false, $rangeCtx);
+            $handle = @fopen($track['url'], 'rb', false, $noVerifyCtx);
             if ($handle) {
+                if ($trackOffset > 0) {
+                    fseek($handle, $trackOffset);
+                }
                 while ($bytes_written < $trackBytes && !feof($handle)) {
                     $chunkSize = min(8192, $trackBytes - $bytes_written);
                     $chunk = fread($handle, $chunkSize);
