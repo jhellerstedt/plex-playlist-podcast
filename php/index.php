@@ -379,14 +379,13 @@ function concatPlaylist(string $playlistId): void
             if (!$handle) {
                 error_log('[concat-stream] FAILED to open track URL offset=' . $trackOffset . ' bytes=' . $trackBytes);
             } else {
+                // Stream data directly without chunking overhead
                 while ($bytes_written < $trackBytes && !feof($handle)) {
                     $chunkSize = min(8192, $trackBytes - $bytes_written);
                     $chunk = fread($handle, $chunkSize);
                     if ($chunk === false) break;
                     echo $chunk;
                     $bytes_written += strlen($chunk); // Use actual bytes read, not requested
-                    @flush();
-                    @ob_flush();
                 }
                 fclose($handle);
             }
