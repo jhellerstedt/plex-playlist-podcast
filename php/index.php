@@ -205,7 +205,11 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
             'header'  => "Content-Length: 0\r\n"
                        . "User-Agent: PlexPlaylistPodcast/1.0\r\n"
                        . "Accept: */*\r\n"
-                       . "X-Plex-Client-Identifier: {$clientId}\r\n",
+                       . "X-Plex-Client-Identifier: {$clientId}\r\n"
+                       . "X-Plex-Product: PlexPlaylistPodcast\r\n"
+                       . "X-Plex-Platform: PHP\r\n"
+                       . "X-Plex-Device: PHP\r\n"
+                       . "X-Plex-Version: 1.0\r\n",
             'ignore_errors' => true,
         ],
         'ssl' => [
@@ -216,13 +220,19 @@ function streamSongProxy(string $partId, string $fileName, int $offsetMs = 0, st
 
     // Register timeline updates to run after streaming completes
     register_shutdown_function(function() use ($plex_url, $scrobbleKey, $durationMs, $plex_token, $timelineCtx) {
-        // Send timeline updates: first playing, then stopped to properly mark as played
-        $timelineUrlPlaying = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
-                             . "&state=playing&time=0&duration={$durationMs}"
+        // Send playing first, then stopped - Plex needs playing to establish a session
+        // Use a small time offset instead of 0 to indicate playback has started
+        $timelineUrlPlaying = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key=".rawurlencode("/library/metadata/{$scrobbleKey}")
+                             . "&state=playing&time=1000&duration={$durationMs}"
                              . "&X-Plex-Token={$plex_token}";
         $respPlaying = @file_get_contents($timelineUrlPlaying, false, $timelineCtx);
         
-        $timelineUrlStopped = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key={$scrobbleKey}"
+        // Small delay to ensure Plex processes the playing state
+        usleep(100000); // 100ms
+        
+        // Send stopped timeline update to mark as played
+        // Removed continuing and offline flags - they may prevent history recording
+        $timelineUrlStopped = "{$plex_url}/:/timeline?ratingKey={$scrobbleKey}&key=".rawurlencode("/library/metadata/{$scrobbleKey}")
                              . "&state=stopped&time={$durationMs}&duration={$durationMs}"
                              . "&X-Plex-Token={$plex_token}";
         $respStopped = @file_get_contents($timelineUrlStopped, false, $timelineCtx);
