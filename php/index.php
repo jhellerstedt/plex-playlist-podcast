@@ -139,7 +139,7 @@ function buildRssFeed(array $tracks, string $playlistTitle, string $playlistId):
         $guid = $dom->createElement('guid', $playlistId.'-'.$episode);
         $guid->setAttribute('isPermaLink', 'false');
         $item->appendChild($guid);
-        $item->appendChild($dom->createElement('pubDate', date('r', strtotime("-{$episode} minutes"))));
+        $item->appendChild($dom->createElement('pubDate', date('r', strtotime("-{$episode} minutes -10 years"))));
         $item->appendChild($dom->createElement('itunes:episode', $totalTracks - $episode + 1));
         $item->appendChild($dom->createElement('itunes:season', 1));
         $enc = $dom->createElement('enclosure');
