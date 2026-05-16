@@ -2,7 +2,7 @@ services:
   php:
     image: php:apache
     container_name: plexpod
-    restart: unless-stopped
+    restart: "no"
     ports:
       - 8585:80
     volumes:
